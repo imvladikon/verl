@@ -530,6 +530,16 @@ class GLMContinuousTokenBuilder(ContinuousTokenBuilder):
         )
 
 
+class GLM53FlashContinuousTokenBuilder(GLMContinuousTokenBuilder):
+    """GLM-5.3-Flash text protocol.
+
+    Flash is a distinct ``glm5_next`` hybrid KDA/DSA architecture, not an
+    alias for the older ``glm_moe_dsa`` GLM family.  Its released tokenizer
+    nevertheless has the same ambiguous ``<|observation|>``/``<|user|>``
+    boundary contract, so only that verified token-level behavior is shared.
+    """
+
+
 class Gemma4ContinuousTokenBuilder(ContinuousTokenBuilder):
     """Gemma4 tool-response boundary handling."""
 
@@ -1055,6 +1065,10 @@ class Gemma4VLContinuousTokenBuilder(VLContinuousTokenMixin, Gemma4ContinuousTok
 
 class GLM46VContinuousTokenBuilder(VLContinuousTokenMixin, GLMContinuousTokenBuilder):
     """GLM-4.6V: GLM observation/user trim + VL processor logic."""
+
+
+class GLM53FlashVLContinuousTokenBuilder(VLContinuousTokenMixin, GLM53FlashContinuousTokenBuilder):
+    """GLM-5.3-Flash: verified boundary trim plus ``Glm5NextProcessor`` rendering."""
 
 
 class KimiVLContinuousTokenBuilder(VLContinuousTokenMixin, ContinuousTokenBuilder):

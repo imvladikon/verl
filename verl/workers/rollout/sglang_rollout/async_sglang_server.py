@@ -70,6 +70,18 @@ logger.setLevel(logging.INFO)
 visible_devices_keyword = get_visible_devices_keyword()
 
 
+def _normalize_sglang_launch_result(launch_result: tuple) -> tuple[Any, Any, dict, tuple]:
+    """Normalize legacy and current SGLang subprocess-launch return layouts."""
+    if len(launch_result) < 3:
+        raise RuntimeError(f"SGLang subprocess launcher returned {len(launch_result)} values; expected at least 3.")
+
+    tokenizer_manager, template_manager = launch_result[:2]
+    scheduler_init_result = launch_result[3] if len(launch_result) > 3 else None
+    scheduler_infos = getattr(scheduler_init_result, "scheduler_infos", None)
+    scheduler_info = scheduler_infos[0] if scheduler_infos else launch_result[2]
+    return tokenizer_manager, template_manager, scheduler_info, launch_result[2:]
+
+
 def _extract_prompt_logprobs_sglang(
     meta_info: dict,
     num_prompt_logprobs: int,
@@ -422,17 +434,29 @@ class SGLangHttpServer:
         sglang.srt.entrypoints.engine._set_envs_and_config = _set_envs_and_config
         os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
         server_args = ServerArgs(**args)
-        # For SGLang main branch or version >= 0.5.10
-        # The latest main branch of SGLang has wrapped the _launch_subprocesses function inside the Engine class
-        if version.parse(sglang.__version__) >= version.parse("0.5.10"):
-            from sglang.srt.entrypoints.http_server import Engine
-
-            self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = Engine._launch_subprocesses(
+        # Development/PR builds may expose a main-branch Engine API while
+        # reporting a 0.0.0.dev version. Detect the API instead of routing those
+        # builds through the legacy version branch.
+        engine_cls = getattr(sglang.srt.entrypoints.engine, "Engine", None)
+        if engine_cls is not None and hasattr(engine_cls, "_launch_subprocesses"):
+            launch_result = engine_cls._launch_subprocesses(
                 server_args=server_args,
                 init_tokenizer_manager_func=sglang.srt.entrypoints.engine.init_tokenizer_manager,
                 run_scheduler_process_func=sglang.srt.entrypoints.engine.run_scheduler_process,
                 run_detokenizer_process_func=sglang.srt.entrypoints.engine.run_detokenizer_process,
             )
+            (
+                self.tokenizer_manager,
+                self.template_manager,
+                self.scheduler_info,
+                self._sglang_launch_resources,
+            ) = _normalize_sglang_launch_result(launch_result)
+
+            # Attach the watchdog where current SGLang's shutdown and signal
+            # paths expect it. ``_sglang_launch_resources`` keeps all returned
+            # process handles alive for the server actor's lifetime.
+            if len(launch_result) > 4 and self.tokenizer_manager is not None:
+                self.tokenizer_manager._subprocess_watchdog = launch_result[4]
         elif version.parse(sglang.__version__) >= version.parse("0.5.7"):
             from sglang.srt.entrypoints.http_server import _launch_subprocesses
 

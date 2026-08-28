@@ -22,6 +22,8 @@ from verl.utils.tokenizer.continuous_token import (
     DeepSeekVL2ContinuousTokenBuilder,
     Gemma4ContinuousTokenBuilder,
     GLM46VContinuousTokenBuilder,
+    GLM53FlashContinuousTokenBuilder,
+    GLM53FlashVLContinuousTokenBuilder,
     GLMContinuousTokenBuilder,
     GptOssContinuousTokenBuilder,
     KimiVLContinuousTokenBuilder,
@@ -272,6 +274,7 @@ def test_builtin_family_surface():
         "minimaxm27",
         "glm47",
         "glm5",
+        "glm53flash",
         "gemma4",
         "gptoss",
         "deepseek",
@@ -283,6 +286,7 @@ def test_builtin_family_surface():
         "gemma4vl",
         "kimivl",
         "glm4v",
+        "glm53flashvl",
         "deepseekvl2",
         "deepseekv4",
     )
@@ -303,6 +307,7 @@ def test_builtin_family_surface():
         (ContinuousTokenModelFamily.MINIMAX_M27, MiniMaxContinuousTokenBuilder),
         (ContinuousTokenModelFamily.GLM47, GLMContinuousTokenBuilder),
         (ContinuousTokenModelFamily.GLM5, GLMContinuousTokenBuilder),
+        (ContinuousTokenModelFamily.GLM53_FLASH, GLM53FlashContinuousTokenBuilder),
         (ContinuousTokenModelFamily.GEMMA4, Gemma4ContinuousTokenBuilder),
         (ContinuousTokenModelFamily.GPTOSS, GptOssContinuousTokenBuilder),
         (ContinuousTokenModelFamily.DEEPSEEK, DeepSeekContinuousTokenBuilder),
@@ -311,6 +316,7 @@ def test_builtin_family_surface():
         (ContinuousTokenModelFamily.QWEN3_VL, QwenVLContinuousTokenBuilder),
         (ContinuousTokenModelFamily.KIMI_VL, KimiVLContinuousTokenBuilder),
         (ContinuousTokenModelFamily.GLM4V, GLM46VContinuousTokenBuilder),
+        (ContinuousTokenModelFamily.GLM53_FLASH_VL, GLM53FlashVLContinuousTokenBuilder),
         (ContinuousTokenModelFamily.DEEPSEEK_VL2, DeepSeekVL2ContinuousTokenBuilder),
         (ContinuousTokenModelFamily.DEEPSEEKV4, DeepSeekV4ContinuousTokenBuilder),
     ],
@@ -324,6 +330,7 @@ def test_builtin_family_class_mapping(family, builder_cls):
     [
         ("glm4_moe", ContinuousTokenModelFamily.GLM47),
         ("glm_moe_dsa", ContinuousTokenModelFamily.GLM5),
+        ("glm5_next", ContinuousTokenModelFamily.GLM53_FLASH),
         ("gemma4", ContinuousTokenModelFamily.GEMMA4),
         ("gpt_oss", ContinuousTokenModelFamily.GPTOSS),
         ("minimax_m2", ContinuousTokenModelFamily.MINIMAX_M2),
@@ -1309,6 +1316,27 @@ class TestWiringVLFactory:
             processor=MockProcessor(),
         )
         assert isinstance(builder, QwenVLContinuousTokenBuilder)
+        assert builder.supports_multimodal() is True
+
+    def test_glm53_flash_unified_with_processor_upgrades_to_flash_vl(self):
+        """glm5_next stays distinct from glm_moe_dsa and uses its processor-backed builder."""
+
+        class MockTokenizer:
+            name_or_path = "zai-org/GLM-5.3-Flash"
+
+            def convert_tokens_to_ids(self, token):
+                return {"<|observation|>": 154829, "<|user|>": 154827}.get(token)
+
+        class MockProcessor:
+            image_processor = type("IP", (), {"merge_size": 2})()
+
+        builder = create_continuous_token_builder(
+            MockTokenizer(),
+            hf_model_type="glm5_next",
+            processor=MockProcessor(),
+        )
+        assert isinstance(builder, GLM53FlashVLContinuousTokenBuilder)
+        assert not isinstance(builder, GLM46VContinuousTokenBuilder)
         assert builder.supports_multimodal() is True
 
     def test_text_specific_family_with_processor_raises(self):

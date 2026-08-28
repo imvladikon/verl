@@ -52,7 +52,7 @@ from ..base import BaseEngine, BaseEngineCtx, EngineRegistry
 from ..utils import enable_full_determinism, postprocess_batch_func, prepare_micro_batches
 from .utils import (
     build_automodel_model,
-    build_distributed_config_from_engine_config,
+    build_distributed_setup_from_engine_config,
     get_dp_group_size,
     get_dp_rank,
     get_pp_rank,
@@ -97,9 +97,11 @@ class AutomodelEngine(BaseEngine):
         apply_te_patches()
 
         world_size = torch.distributed.get_world_size()
-        self.distributed_config, self.device_mesh, self.moe_mesh = build_distributed_config_from_engine_config(
-            self.engine_config, world_size
-        )
+        self.distributed_setup = build_distributed_setup_from_engine_config(self.engine_config, world_size)
+        self.distributed_config = self.distributed_setup.strategy_config
+        self.device_mesh = self.distributed_setup.mesh_context.device_mesh
+        self.moe_mesh = self.distributed_setup.mesh_context.moe_mesh
+        self._is_glm53_flash = self.model_config.hf_config.model_type == "glm5_next"
 
         if self.engine_config.full_determinism:
             enable_full_determinism(seed=self.engine_config.seed)
@@ -128,9 +130,7 @@ class AutomodelEngine(BaseEngine):
 
     def initialize(self):
         """Build the model, optimizer, LR scheduler, and checkpointer using Automodel infrastructure."""
-        self.module = build_automodel_model(
-            self.model_config, self.engine_config, self.distributed_config, self.device_mesh, self.moe_mesh
-        )
+        self.module = build_automodel_model(self.model_config, self.engine_config, self.distributed_setup)
         log_gpu_memory_usage("After Automodel model build", logger=logger)
 
         if not self.engine_config.forward_only:
@@ -155,13 +155,11 @@ class AutomodelEngine(BaseEngine):
 
     def _build_optimizer(self, module):
         """Build optimizer via Automodel's build_optimizer."""
-        from nemo_automodel.components.config.loader import ConfigNode
-        from nemo_automodel.recipes.llm.train_ft import build_optimizer as automodel_build_optimizer
+        from nemo_automodel.components.optim.optimizer import build_optimizer as automodel_build_optimizer
 
         config = self.optimizer_config
 
         opt_dict = {
-            "_target_": f"{config.optimizer_impl}.{config.optimizer}",
             "lr": config.lr,
             "weight_decay": config.weight_decay,
             "eps": config.eps,
@@ -182,8 +180,11 @@ class AutomodelEngine(BaseEngine):
         if config.override_optimizer_config:
             opt_dict.update(config.override_optimizer_config)
 
-        cfg_opt = ConfigNode(opt_dict)
-        optimizers = automodel_build_optimizer(module, cfg_opt, self.distributed_config, self.device_mesh)
+        optimizers = automodel_build_optimizer(
+            module,
+            (f"{config.optimizer_impl}.{config.optimizer}", opt_dict),
+            device_mesh=self.device_mesh,
+        )
         assert len(optimizers) == 1, f"Expected 1 optimizer, got {len(optimizers)}"
         return optimizers[0]
 
@@ -421,10 +422,29 @@ class AutomodelEngine(BaseEngine):
             offload_automodel_optimizer(self.optimizer)
 
     def get_per_tensor_param(self, **kwargs):
+        if self._is_glm53_flash and self.engine_config.ep_size > 1:
+            raise NotImplementedError(
+                "GLM-5.3-Flash AutoModel rollout sync with EP>1 is not yet safe: "
+                "the model-specific adapter exports only rank-local experts, while the "
+                "VERL full-seed protocol requires every rank to iterate the same complete "
+                "HF tensor stream. Use the qualified Megatron-Bridge engine for production "
+                "VERL, or AutoModel with EP=1 for tiny-contract tests."
+            )
         load_automodel_model_to_gpu(self.module)
 
         params = self.module.state_dict()
-        params = convert_weight_keys(params, getattr(self.module, "_fsdp_wrapped_module", self.module))
+        unwrapped = getattr(self.module, "_fsdp_wrapped_module", self.module)
+        state_dict_adapter = getattr(unwrapped, "state_dict_adapter", None)
+        if self._is_glm53_flash:
+            if state_dict_adapter is None:
+                raise RuntimeError("GLM-5.3-Flash rollout export requires its HF state-dict adapter")
+            params = state_dict_adapter.to_hf(
+                params,
+                exclude_key_regex=r".*_extra_state.*",
+                quantization=False,
+            )
+        else:
+            params = convert_weight_keys(params, unwrapped)
 
         if self._is_offload_param:
             offload_automodel_model_to_cpu(self.module)
@@ -524,12 +544,13 @@ class AutomodelEngineWithLMHead(AutomodelEngine):
                 "position_ids": position_ids_rmpad,
             }
 
-            # For TE attention backend, pass cu_seqlens
-            if self.engine_config.attn_implementation == "te":
+            # Flash KDA is recurrent: every packed document boundary must be
+            # supplied even when sparse DSA uses SDPA/cuDNN rather than TE.
+            if self._is_glm53_flash or self.engine_config.attn_implementation == "te":
                 cu_seqlens = input_ids.offsets().to(torch.int32)
                 max_seqlen = cu_seqlens.diff().max().item()
                 model_inputs["qkv_format"] = "thd"
-                model_inputs["cu_seqlens"] = cu_seqlens.unsqueeze(0)
+                model_inputs["cu_seqlens"] = cu_seqlens
                 model_inputs["max_seqlen"] = max_seqlen
 
         else:

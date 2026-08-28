@@ -26,6 +26,17 @@ from verl.utils.model import get_generation_config, update_model_config
 __all__ = ["HFModelConfig", "MtpConfig"]
 
 
+def _disable_mtp_layers(hf_config: Any) -> None:
+    """Disable every released top-level or nested MTP count encoding."""
+    for config in (hf_config, getattr(hf_config, "text_config", None)):
+        if config is None:
+            continue
+        if hasattr(config, "num_nextn_predict_layers"):
+            config.num_nextn_predict_layers = 0
+        if hasattr(config, "mtp_num_hidden_layers"):
+            config.mtp_num_hidden_layers = 0
+
+
 @dataclass
 class MtpConfig(BaseConfig):
     """
@@ -83,6 +94,7 @@ class HFModelConfig(BaseConfig):
         "local_hf_config_path",
         "local_tokenizer_path",
         "mtp",
+        "freeze_vision_tower",
     }
 
     path: str = MISSING
@@ -116,6 +128,11 @@ class HFModelConfig(BaseConfig):
 
     enable_gradient_checkpointing: bool = True
     enable_activation_offload: bool = False
+
+    # Whether VLM training should freeze the visual encoder. ActorConfig's
+    # legacy top-level flag is copied here before the training engine is built;
+    # SFT can set this field directly under ``model``.
+    freeze_vision_tower: bool = False
 
     use_remove_padding: bool = True
 
@@ -234,14 +251,10 @@ class HFModelConfig(BaseConfig):
         # When MTP is disabled, zero out MTP layer counts from hf_config so that
         # downstream engine/worker code does not need to handle each MTP field format
         # individually. Supports both DeepSeek-style (num_nextn_predict_layers) and
-        # Qwen3.5-style (mtp_num_hidden_layers, possibly nested under text_config).
+        # Qwen3.5-style (mtp_num_hidden_layers), at either the root or text config.
+        # GLM-5.3-Flash uses text_config.num_nextn_predict_layers.
         if not self.mtp.enable:
-            if hasattr(self.hf_config, "num_nextn_predict_layers"):
-                self.hf_config.num_nextn_predict_layers = 0
-            if hasattr(self.hf_config, "mtp_num_hidden_layers"):
-                self.hf_config.mtp_num_hidden_layers = 0
-            if hasattr(self.hf_config, "text_config") and hasattr(self.hf_config.text_config, "mtp_num_hidden_layers"):
-                self.hf_config.text_config.mtp_num_hidden_layers = 0
+            _disable_mtp_layers(self.hf_config)
 
         # Ensure target_modules is a str or list[str] (only if not None)
         if self.target_modules is not None:

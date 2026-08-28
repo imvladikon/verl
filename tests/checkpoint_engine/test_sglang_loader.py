@@ -227,3 +227,16 @@ def test_verify_sweep_fails_loud_on_divergence():
     model = _FakeModel(diverged)
     with pytest.raises(RuntimeError, match="verification FAILED"):
         apply_delta(model, _dense_verify_flush(named))
+
+
+def test_verify_sweep_rejects_unobserved_noop_loader():
+    """An unknown key/no-op loader must not count as successful parity."""
+    import pytest
+
+    class NoopModel:
+        @staticmethod
+        def load_weights(_chunk):
+            return None
+
+    with pytest.raises(RuntimeError, match="could not resolve any copy_ destination"):
+        apply_delta(NoopModel(), _dense_verify_flush(_make_named()))

@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
 
-from verl.workers.config.model import HFModelConfig
+from verl.workers.config.model import HFModelConfig, _disable_mtp_layers
 
 
 class TestHFModelConfigCPU:
@@ -94,3 +95,19 @@ class TestHFModelConfigCPU:
         merged_config = OmegaConf.merge(base_config, invalid_cli_config)
         with pytest.raises(TypeError):
             OmegaConf.to_object(merged_config)
+
+    def test_disable_mtp_layers_covers_glm53_flash_nested_field(self):
+        text_config = SimpleNamespace(num_nextn_predict_layers=1)
+        hf_config = SimpleNamespace(text_config=text_config)
+
+        _disable_mtp_layers(hf_config)
+
+        assert hf_config.text_config.num_nextn_predict_layers == 0
+
+    def test_freeze_vision_tower_is_a_mutable_model_contract(self):
+        model_config = object.__new__(HFModelConfig)
+        model_config.freeze_vision_tower = False
+
+        model_config.freeze_vision_tower = True
+
+        assert model_config.freeze_vision_tower is True
