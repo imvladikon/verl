@@ -15,13 +15,13 @@ EXPECTED = {
         "distribution": "sglang",
         "module": "sglang",
         "url": "https://github.com/imvladikon/sglang.git",
-        "commit": "35b66043c7ca95d03c1a25d0c49eca7caba8187e",
+        "commit": "b26f2c18c00259a15e2829db9bfef96ea2365972",
     },
     "megatron": {
         "distribution": "megatron-core",
         "module": "megatron.core.package_info",
         "url": "https://github.com/imvladikon/Megatron-LM.git",
-        "commit": "f3926fee5d6764e2faa1d695da0ce56e1a6cf9c5",
+        "commit": "366ae1b219a212c36be03923a05a207d174cbe22",
     },
     "automodel": {
         "distribution": "nemo-automodel",
