@@ -1,10 +1,14 @@
+import random
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 from tensordict import TensorDict
 from transformers import AutoConfig
 
+from verl.trainer.config import CheckpointConfig
+from verl.workers.config import AutomodelCheckpointConfig
 from verl.workers.engine.automodel.transformer_impl import AutomodelEngine, AutomodelEngineWithLMHead
 from verl.workers.engine.automodel.utils import build_automodel_model, is_glm53_flash_config
 from verl.workers.engine_workers import _attach_actor_model_config
@@ -169,6 +173,250 @@ def test_current_automodel_optimizer_builder_is_callable():
     optimizer = engine._build_optimizer(torch.nn.Linear(4, 4))
 
     assert isinstance(optimizer, torch.optim.AdamW)
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_config", "expected_consolidated"),
+    [
+        (CheckpointConfig(), True),
+        (AutomodelCheckpointConfig(save_consolidated=False), False),
+    ],
+)
+def test_automodel_hf_consolidation_follows_checkpoint_config(monkeypatch, checkpoint_config, expected_consolidated):
+    captured = {}
+    engine = object.__new__(AutomodelEngine)
+    engine.checkpoint_config = checkpoint_config
+    engine.model_config = SimpleNamespace(path="unused-model")
+    engine.device_mesh = None
+    engine.moe_mesh = None
+
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.CheckpointingConfig",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.Checkpointer",
+        lambda **kwargs: captured.update(kwargs) or SimpleNamespace(),
+    )
+    monkeypatch.setattr("verl.workers.engine.automodel.transformer_impl.get_dp_rank", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("verl.workers.engine.automodel.transformer_impl.get_tp_rank", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("verl.workers.engine.automodel.transformer_impl.get_pp_rank", lambda *_args, **_kwargs: 0)
+
+    engine._build_checkpointer()
+
+    assert captured["config"].save_consolidated is expected_consolidated
+
+
+def test_automodel_rng_state_round_trip_is_rank_local(monkeypatch, tmp_path):
+    state = {
+        "cpu": torch.tensor([1, 2, 3], dtype=torch.uint8),
+        "numpy": np.random.get_state(),
+        "random": random.getstate(),
+    }
+    loaded = []
+    engine = object.__new__(AutomodelEngine)
+    engine.rank = 3
+    engine.world_size = 4
+    engine.checkpoint_config = AutomodelCheckpointConfig()
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.BaseCheckpointManager.get_rng_state",
+        lambda: state,
+    )
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.BaseCheckpointManager.load_rng_state",
+        loaded.append,
+    )
+
+    engine._save_rng_state(str(tmp_path))
+    engine._load_rng_state(str(tmp_path))
+
+    assert (tmp_path / "extra_state_world_size_4_rank_3.pt").is_file()
+    assert len(loaded) == 1
+    torch.testing.assert_close(loaded[0]["cpu"], state["cpu"])
+
+
+def test_automodel_rng_state_round_trip_restores_generators(tmp_path):
+    random.seed(101)
+    np.random.seed(202)
+    torch.manual_seed(303)
+    engine = object.__new__(AutomodelEngine)
+    engine.rank = 0
+    engine.world_size = 1
+    engine.checkpoint_config = AutomodelCheckpointConfig()
+
+    engine._save_rng_state(str(tmp_path))
+    expected = (random.random(), np.random.random(), torch.rand(1))
+    random.seed(404)
+    np.random.seed(505)
+    torch.manual_seed(606)
+    engine._load_rng_state(str(tmp_path))
+    actual = (random.random(), np.random.random(), torch.rand(1))
+
+    assert actual[0] == expected[0]
+    assert actual[1] == expected[1]
+    torch.testing.assert_close(actual[2], expected[2])
+
+
+def test_automodel_extra_load_fails_closed_without_rank_rng(tmp_path):
+    engine = object.__new__(AutomodelEngine)
+    engine.rank = 2
+    engine.world_size = 4
+    engine.checkpoint_config = AutomodelCheckpointConfig(strict_rng_state=True)
+
+    with pytest.raises(RuntimeError, match="per-rank RNG state is incomplete"):
+        engine._load_rng_state(str(tmp_path))
+
+
+def test_automodel_missing_rank_rng_is_backward_compatible_by_default(caplog, tmp_path):
+    engine = object.__new__(AutomodelEngine)
+    engine.rank = 1
+    engine.world_size = 2
+    engine.checkpoint_config = CheckpointConfig()
+
+    engine._load_rng_state(str(tmp_path))
+
+    assert "all ranks continue without RNG restoration" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("save_contents", "expected_calls"),
+    [
+        (["model"], ["model"]),
+        (["hf_model"], ["model"]),
+        (["optimizer"], ["optimizer"]),
+        (["extra"], ["extra"]),
+    ],
+)
+def test_automodel_save_honors_checkpoint_contents(monkeypatch, tmp_path, save_contents, expected_calls):
+    calls = []
+    engine = object.__new__(AutomodelEngine)
+    engine.module = torch.nn.Linear(2, 2)
+    engine.optimizer = object()
+    engine.lr_scheduler = object()
+    engine._is_offload_param = False
+    engine.checkpoint_config = AutomodelCheckpointConfig(save_contents=save_contents)
+    engine.checkpointer = SimpleNamespace(
+        save_model=lambda *_args, **_kwargs: calls.append("model"),
+        save_optimizer=lambda *_args, **_kwargs: calls.append("optimizer"),
+    )
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.load_automodel_model_to_gpu",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(engine, "_save_rng_state", lambda *_args, **_kwargs: calls.append("extra"))
+    monkeypatch.setattr(torch.distributed, "barrier", lambda: None)
+
+    engine.save_checkpoint(str(tmp_path))
+
+    assert calls == expected_calls
+
+
+def test_automodel_save_materializes_adam_state_for_unused_parameters(monkeypatch, tmp_path):
+    class PartiallyUsedModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.used = torch.nn.Parameter(torch.ones(2))
+            self.unused = torch.nn.Parameter(torch.ones(2))
+
+    model = PartiallyUsedModel()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    model.used.sum().backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    assert optimizer.state[model.unused] == {}
+
+    captured = {}
+    engine = object.__new__(AutomodelEngine)
+    engine.module = model
+    engine.optimizer = optimizer
+    engine.lr_scheduler = None
+    engine._is_offload_param = False
+    engine.checkpoint_config = AutomodelCheckpointConfig(save_contents=["optimizer"])
+    engine.checkpointer = SimpleNamespace(
+        save_optimizer=lambda optimizer, *_args, **_kwargs: captured.update(optimizer.state[model.unused])
+    )
+    monkeypatch.setattr(
+        "verl.workers.engine.automodel.transformer_impl.load_automodel_model_to_gpu",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(torch.distributed, "barrier", lambda: None)
+
+    engine.save_checkpoint(str(tmp_path))
+
+    assert set(captured) == {"step", "exp_avg", "exp_avg_sq"}
+    assert captured["step"].item() == 0
+    torch.testing.assert_close(captured["exp_avg"], torch.zeros_like(model.unused))
+    torch.testing.assert_close(captured["exp_avg_sq"], torch.zeros_like(model.unused))
+
+
+@pytest.mark.parametrize(
+    ("load_contents", "expected_calls"),
+    [
+        (["model"], ["model"]),
+        (["hf_model"], ["model"]),
+        (["optimizer"], ["optimizer"]),
+        (["extra"], ["extra"]),
+    ],
+)
+def test_automodel_load_honors_checkpoint_contents(monkeypatch, tmp_path, load_contents, expected_calls):
+    calls = []
+    engine = object.__new__(AutomodelEngine)
+    engine.module = torch.nn.Linear(2, 2)
+    engine.optimizer = object()
+    engine.lr_scheduler = object()
+    engine._is_offload_param = False
+    engine._is_offload_optimizer = False
+    engine.checkpoint_config = AutomodelCheckpointConfig(load_contents=load_contents)
+    engine.checkpointer = SimpleNamespace(
+        load_model=lambda *_args, **_kwargs: calls.append("model"),
+        load_optimizer=lambda *_args, **_kwargs: calls.append("optimizer"),
+    )
+    monkeypatch.setattr(engine, "_load_rng_state", lambda *_args, **_kwargs: calls.append("extra"))
+    monkeypatch.setattr(torch.distributed, "barrier", lambda: None)
+    if "hf_model" in load_contents:
+        (tmp_path / "model" / "consolidated").mkdir(parents=True)
+
+    engine.load_checkpoint(str(tmp_path))
+
+    assert calls == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("attribute", "contents", "message"),
+    [
+        ("save_contents", [], "must not be empty"),
+        ("load_contents", [], "must not be empty"),
+        ("save_contents", ["unknown"], "Unknown AutoModel checkpoint"),
+        ("load_contents", ["unknown"], "Unknown AutoModel checkpoint"),
+    ],
+)
+def test_automodel_checkpoint_config_rejects_invalid_contents(attribute, contents, message):
+    with pytest.raises(ValueError, match=message):
+        AutomodelCheckpointConfig(**{attribute: contents})
+
+
+def test_automodel_checkpoint_config_rejects_hf_export_without_consolidation():
+    with pytest.raises(ValueError, match="hf_model.*save_consolidated is false"):
+        AutomodelCheckpointConfig(save_contents=["hf_model"], save_consolidated=False)
+
+
+def test_legacy_automodel_engine_rejects_empty_checkpoint_contents():
+    engine = object.__new__(AutomodelEngine)
+    engine.checkpoint_config = CheckpointConfig(save_contents=[])
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        engine._checkpoint_contents("save")
+
+
+def test_automodel_corrupt_rng_payload_fails_closed(tmp_path):
+    engine = object.__new__(AutomodelEngine)
+    engine.rank = 0
+    engine.world_size = 1
+    engine.checkpoint_config = AutomodelCheckpointConfig()
+    torch.save({"not_rng": True}, engine._rng_state_path(str(tmp_path)))
+
+    with pytest.raises(RuntimeError, match="RNG deserialize failed"):
+        engine._load_rng_state(str(tmp_path))
 
 
 def test_flash_rollout_export_uses_model_state_dict_adapter(monkeypatch):

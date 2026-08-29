@@ -95,6 +95,7 @@ class SFTTrainer:
             resume_mode=resume_mode,
             resume_from_path=resume_from_path,
             lora_train_meta=lora_train_meta,
+            checkpoint_config=self.checkpoint_config,
         )
 
     def _get_lora_train_meta(self):
