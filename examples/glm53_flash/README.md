@@ -14,8 +14,8 @@ extra would hide ABI conflicts rather than make the lifecycle reproducible.
 
 ## Pinned sources
 
-- SGLang: `imvladikon/sglang@b26f2c18c00259a15e2829db9bfef96ea2365972`
-- Megatron-Core: `imvladikon/Megatron-LM@366ae1b219a212c36be03923a05a207d174cbe22`
+- SGLang: `imvladikon/sglang@487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80`
+- Megatron-Core: `imvladikon/Megatron-LM@6b205f42ced4dd3e8b902cb4b4ddcbe020855e28`
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
 
 The authoritative model contract is

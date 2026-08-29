@@ -2204,7 +2204,7 @@ dependencies = [
 [[package]]
 name = "megatron-core"
 version = "0.18.0"
-source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=366ae1b219a212c36be03923a05a207d174cbe22#366ae1b219a212c36be03923a05a207d174cbe22" }
+source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=6b205f42ced4dd3e8b902cb4b4ddcbe020855e28#6b205f42ced4dd3e8b902cb4b4ddcbe020855e28" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -4585,8 +4585,8 @@ wheels = [
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev17407+gb26f2c18c"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=b26f2c18c00259a15e2829db9bfef96ea2365972#b26f2c18c00259a15e2829db9bfef96ea2365972" }
+version = "0.0.0.dev17419+g487ed7a96"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80#487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -5888,7 +5888,7 @@ glm53-automodel = [
     { name = "fastapi", version = "0.137.0", source = { registry = "https://pypi.org/simple" } },
     { name = "hydra-core" },
     { name = "mathruler" },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=366ae1b219a212c36be03923a05a207d174cbe22#366ae1b219a212c36be03923a05a207d174cbe22" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=6b205f42ced4dd3e8b902cb4b4ddcbe020855e28#6b205f42ced4dd3e8b902cb4b4ddcbe020855e28" } },
     { name = "nemo-automodel" },
     { name = "numpy" },
     { name = "nvtx" },
@@ -5923,7 +5923,7 @@ glm53-flash = [
     { name = "fastapi", version = "0.137.0", source = { registry = "https://pypi.org/simple" } },
     { name = "hydra-core" },
     { name = "mathruler" },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=366ae1b219a212c36be03923a05a207d174cbe22#366ae1b219a212c36be03923a05a207d174cbe22" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=6b205f42ced4dd3e8b902cb4b4ddcbe020855e28#6b205f42ced4dd3e8b902cb4b4ddcbe020855e28" } },
     { name = "numpy" },
     { name = "nvtx" },
     { name = "packaging" },
@@ -5937,7 +5937,7 @@ glm53-flash = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm53-flash' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev17407+gb26f2c18c", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=b26f2c18c00259a15e2829db9bfef96ea2365972#b26f2c18c00259a15e2829db9bfef96ea2365972" } },
+    { name = "sglang", version = "0.0.0.dev17419+g487ed7a96", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80#487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -6161,8 +6161,8 @@ requires-dist = [
     { name = "mbridge", marker = "extra == 'vllm'", git = "https://github.com/ISEEKYAN/mbridge.git?rev=641a5a0" },
     { name = "megatron-bridge", marker = "extra == 'megatron'", specifier = "==0.5.2", index = "https://verl-project.github.io/verl-wheelhouse/simple/" },
     { name = "megatron-core", marker = "extra == 'cpu'", git = "https://github.com/NVIDIA/Megatron-LM.git?tag=core_v0.18.0" },
-    { name = "megatron-core", marker = "extra == 'glm53-automodel'", git = "https://github.com/imvladikon/Megatron-LM.git?rev=366ae1b219a212c36be03923a05a207d174cbe22" },
-    { name = "megatron-core", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/Megatron-LM.git?rev=366ae1b219a212c36be03923a05a207d174cbe22" },
+    { name = "megatron-core", marker = "extra == 'glm53-automodel'", git = "https://github.com/imvladikon/Megatron-LM.git?rev=6b205f42ced4dd3e8b902cb4b4ddcbe020855e28" },
+    { name = "megatron-core", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/Megatron-LM.git?rev=6b205f42ced4dd3e8b902cb4b4ddcbe020855e28" },
     { name = "megatron-core", marker = "extra == 'megatron'", git = "https://github.com/NVIDIA/Megatron-LM.git?tag=core_v0.18.0" },
     { name = "nemo-automodel", marker = "extra == 'glm53-automodel'", git = "https://github.com/NVIDIA-NeMo/Automodel.git?rev=9228f33cf73d66a9b2e84256d298aac9a70283f0" },
     { name = "numpy", specifier = ">=2.0.0" },
@@ -6199,7 +6199,7 @@ requires-dist = [
     { name = "qwen-vl-utils", marker = "extra == 'verl-core'" },
     { name = "ray", extras = ["default"], specifier = ">=2.41.0" },
     { name = "ray", extras = ["default"], marker = "extra == 'verl-core'", specifier = ">=2.41.0" },
-    { name = "sglang", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=b26f2c18c00259a15e2829db9bfef96ea2365972" },
+    { name = "sglang", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" },
     { name = "sglang", marker = "extra == 'sglang'", specifier = "==0.5.12" },
     { name = "sglang-kernel", marker = "extra == 'sglang'" },
     { name = "sglang-router", marker = "extra == 'ci'", specifier = "==0.2.2" },

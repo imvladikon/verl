@@ -130,8 +130,8 @@ glm53-flash = [
     "torchvision==0.28.0",
     "torchaudio==2.11.0",
     "transformers==5.16.1",
-    "sglang @ git+https://github.com/imvladikon/sglang.git@b26f2c18c00259a15e2829db9bfef96ea2365972#subdirectory=python",
-    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@366ae1b219a212c36be03923a05a207d174cbe22",
+    "sglang @ git+https://github.com/imvladikon/sglang.git@487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80#subdirectory=python",
+    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@6b205f42ced4dd3e8b902cb4b4ddcbe020855e28",
 ]
 
 # AutoModel SFT is isolated from the SGLang rollout environment because the
@@ -143,7 +143,7 @@ glm53-automodel = [
     "torchvision==0.28.0",
     "transformers==5.16.1",
     "nemo-automodel @ git+https://github.com/NVIDIA-NeMo/Automodel.git@9228f33cf73d66a9b2e84256d298aac9a70283f0",
-    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@366ae1b219a212c36be03923a05a207d174cbe22",
+    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@6b205f42ced4dd3e8b902cb4b4ddcbe020855e28",
 ]
 
 # DEFERRED — trtllm is a CUDA-13 backend (torch 2.10.0+cu130, conflict-gated).
@@ -463,8 +463,8 @@ mbridge = { git = "https://github.com/ISEEKYAN/mbridge.git", rev = "641a5a0" }
 megatron-core = [
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "megatron" },
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "cpu" },
-    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "366ae1b219a212c36be03923a05a207d174cbe22", extra = "glm53-flash" },
-    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "366ae1b219a212c36be03923a05a207d174cbe22", extra = "glm53-automodel" },
+    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "6b205f42ced4dd3e8b902cb4b4ddcbe020855e28", extra = "glm53-flash" },
+    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "6b205f42ced4dd3e8b902cb4b4ddcbe020855e28", extra = "glm53-automodel" },
 ]
 
 # Per-extra routing to the matching pytorch wheel index.
