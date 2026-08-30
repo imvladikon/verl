@@ -15,7 +15,7 @@ EXPECTED = {
         "distribution": "sglang",
         "module": "sglang",
         "url": "https://github.com/imvladikon/sglang.git",
-        "commit": "487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80",
+        "commit": "35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4",
     },
     "megatron": {
         "distribution": "megatron-core",

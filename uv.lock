@@ -4571,7 +4571,7 @@ wheels = [
 
 [[package]]
 name = "sgl-deep-gemm"
-version = "0.1.5.post3"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -4580,13 +4580,13 @@ dependencies = [
     { name = "apache-tvm-ffi", version = "0.1.11", source = { registry = "https://pypi.org/simple" } },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/a8/90b5b2f3f78025be2112fb7c83945e34b4c44f57ce87ef8ef30bede570ca/sgl_deep_gemm-0.1.5.post3-py3-none-manylinux2014_x86_64.whl", hash = "sha256:e951730cad2f047c16aab39a1ca5b560bff9937d3b079ecde86733c88141582b", size = 4819569, upload-time = "2026-08-15T01:11:44.777Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/68/c649391b20e37b85f2b43c49dcfd533cecae5adb06572f10516a61242b57/sgl_deep_gemm-0.1.6-py3-none-manylinux2014_x86_64.whl", hash = "sha256:d86c230fd4bfced4831ad794fb54b87e1809feb5432477f60b568135688c3f49", size = 4846810, upload-time = "2026-08-29T08:53:13.194Z" },
 ]
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev17419+g487ed7a96"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80#487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" }
+version = "0.0.0.dev17486+g35c75ae79"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4#35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -4640,7 +4640,7 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "setproctitle" },
     { name = "sgl-deep-ep" },
-    { name = "sgl-deep-gemm", version = "0.1.5.post3", source = { registry = "https://pypi.org/simple" } },
+    { name = "sgl-deep-gemm", version = "0.1.6", source = { registry = "https://pypi.org/simple" } },
     { name = "sglang-kernel", version = "0.4.6.post1", source = { registry = "https://pypi.org/simple" } },
     { name = "smg-grpc-servicer" },
     { name = "soundfile" },
@@ -5937,7 +5937,7 @@ glm53-flash = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm53-flash' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev17419+g487ed7a96", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80#487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" } },
+    { name = "sglang", version = "0.0.0.dev17486+g35c75ae79", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4#35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -6199,7 +6199,7 @@ requires-dist = [
     { name = "qwen-vl-utils", marker = "extra == 'verl-core'" },
     { name = "ray", extras = ["default"], specifier = ">=2.41.0" },
     { name = "ray", extras = ["default"], marker = "extra == 'verl-core'", specifier = ">=2.41.0" },
-    { name = "sglang", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=487ed7a96fb27817a1381a5e7fe2dc9fa01c1b80" },
+    { name = "sglang", marker = "extra == 'glm53-flash'", git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4" },
     { name = "sglang", marker = "extra == 'sglang'", specifier = "==0.5.12" },
     { name = "sglang-kernel", marker = "extra == 'sglang'" },
     { name = "sglang-router", marker = "extra == 'ci'", specifier = "==0.2.2" },
