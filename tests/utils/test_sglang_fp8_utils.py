@@ -78,6 +78,42 @@ def test_sglang_fp8_quant_config_accepts_mapping_like_config(monkeypatch):
     assert not helper.should_quantize_param("model.layers.0.linear_attn.in_proj_ba.weight")
 
 
+def test_sglang_fp8_quantizer_handles_glm53_flash_text_prefixes(monkeypatch):
+    monkeypatch.delenv("SGLANG_FP8_IGNORED_LAYERS", raising=False)
+    hf_config = SimpleNamespace(
+        quantization_config={
+            "modules_to_not_convert": [
+                "model.layers.0.self_attn.q_proj",
+                "model.layers.0.self_attn.k_proj",
+                "model.layers.0.self_attn.v_proj",
+                "model.layers.0.self_attn.o_proj",
+                "model.visual.merger.down_proj",
+            ],
+        }
+    )
+
+    helper = SGLangFP8QuantizerHelper(build_sglang_fp8_quant_config(hf_config))
+
+    # HF's multimodal wrapper inserts ``language_model`` into text parameter
+    # names, whereas SGLang and the checkpoint ignore list omit it.
+    for projection in ("q_proj", "k_proj", "v_proj", "o_proj"):
+        assert not helper.should_quantize_param(
+            f"model.language_model.layers.0.self_attn.{projection}.weight"
+        )
+    assert not helper.should_quantize_param("model.visual.merger.down_proj.weight")
+
+
+def test_sglang_fp8_quantizer_includes_glm53_flash_dsa_projections(monkeypatch):
+    monkeypatch.delenv("SGLANG_FP8_IGNORED_LAYERS", raising=False)
+    helper = SGLangFP8QuantizerHelper(build_sglang_fp8_quant_config())
+
+    for layer_id in (3, 7):
+        for projection in ("q_a_proj", "q_b_proj", "kv_a_proj_with_mqa"):
+            assert helper.should_quantize_param(
+                f"model.language_model.layers.{layer_id}.self_attn.{projection}.weight"
+            )
+
+
 def test_sglang_fp8_quantizer_matches_regex_ignored_layers(monkeypatch):
     monkeypatch.delenv("SGLANG_FP8_IGNORED_LAYERS", raising=False)
     hf_config = SimpleNamespace(
