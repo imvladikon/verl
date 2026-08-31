@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless the active GLM dependencies match the committed pins."""
+"""Fail closed unless active GLM dependencies match their locked revisions."""
 
 from __future__ import annotations
 
@@ -9,25 +9,28 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import tomllib
 
 EXPECTED = {
     "sglang": {
         "distribution": "sglang",
         "module": "sglang",
         "url": "https://github.com/imvladikon/sglang.git",
-        "commit": "35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4",
+        "ref": "glm-5.3-flash",
     },
     "megatron": {
         "distribution": "megatron-core",
         "module": "megatron.core.package_info",
         "url": "https://github.com/imvladikon/Megatron-LM.git",
-        "commit": "6b205f42ced4dd3e8b902cb4b4ddcbe020855e28",
+        "ref": "glm-5.3-flash",
     },
     "automodel": {
         "distribution": "nemo-automodel",
         "module": "nemo_automodel",
         "url": "https://github.com/NVIDIA-NeMo/Automodel.git",
-        "commit": "9228f33cf73d66a9b2e84256d298aac9a70283f0",
+        "ref": "9228f33cf73d66a9b2e84256d298aac9a70283f0",
     },
 }
 
@@ -104,12 +107,12 @@ def _normalize_url(value: str) -> str:
     return value.removesuffix("/").removesuffix(".git")
 
 
-def _verify(name: str) -> dict[str, str]:
+def _verify(name: str, locked_commit: str) -> dict[str, str]:
     expected = EXPECTED[name]
     actual = _installed_provenance(expected["distribution"], expected["module"])
-    if actual["commit"] != expected["commit"]:
+    if actual["commit"] != locked_commit:
         raise RuntimeError(
-            f"{name} commit mismatch: expected {expected['commit']}, got {actual['commit']} "
+            f"{name} commit mismatch: expected locked {locked_commit}, got {actual['commit']} "
             f"from {actual['module_path']}"
         )
     if actual["kind"] == "checkout":
@@ -120,23 +123,41 @@ def _verify(name: str) -> dict[str, str]:
     return actual
 
 
-def _verify_lock(repo_root: Path, names: tuple[str, ...]) -> None:
-    lock = (repo_root / "uv.lock").read_text()
+def _locked_commits(repo_root: Path, names: tuple[str, ...]) -> dict[str, str]:
+    lock = tomllib.loads((repo_root / "uv.lock").read_text())
+    commits = {}
     for name in names:
         expected = EXPECTED[name]
-        if expected["url"] not in lock or expected["commit"] not in lock:
-            raise RuntimeError(f"uv.lock does not contain the exact {name} source pin")
+        matches = []
+        for package in lock["package"]:
+            if package["name"] != expected["distribution"]:
+                continue
+            git_source = package.get("source", {}).get("git")
+            if not git_source:
+                continue
+            parsed = urlsplit(git_source)
+            if _normalize_url(f"{parsed.scheme}://{parsed.netloc}{parsed.path}") != _normalize_url(expected["url"]):
+                continue
+            if parse_qs(parsed.query).get("rev") != [expected["ref"]]:
+                continue
+            if not parsed.fragment:
+                raise RuntimeError(f"uv.lock has no resolved commit for {name}")
+            matches.append(parsed.fragment)
+        if len(matches) != 1:
+            raise RuntimeError(f"uv.lock has {len(matches)} matching sources for {name}, expected one")
+        commits[name] = matches[0]
+    return commits
 
 
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[2]
     names = ("sglang", "megatron") if args.profile == "flash" else ("automodel", "megatron")
-    _verify_lock(repo_root, names)
+    locked_commits = _locked_commits(repo_root, names)
     result = {
         "status": "pass",
         "profile": args.profile,
-        "dependencies": {name: _verify(name) for name in names},
+        "dependencies": {name: _verify(name, locked_commits[name]) for name in names},
     }
     rendered = json.dumps(result, indent=2, sort_keys=True)
     print(rendered)

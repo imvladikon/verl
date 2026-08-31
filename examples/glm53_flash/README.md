@@ -12,11 +12,14 @@ The two environments are intentionally separate. Current AutoModel and SGLang
 require incompatible CUDA-kernel dependency stacks, so combining them in one
 extra would hide ABI conflicts rather than make the lifecycle reproducible.
 
-## Pinned sources
+## Tracked sources
 
-- SGLang: `imvladikon/sglang@35c75ae79a86fb91dc4b89cfdf2dd1ce4df9b2d4`
-- Megatron-Core: `imvladikon/Megatron-LM@6b205f42ced4dd3e8b902cb4b4ddcbe020855e28`
+- SGLang: `imvladikon/sglang@glm-5.3-flash`
+- Megatron-Core: `imvladikon/Megatron-LM@glm-5.3-flash`
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
+
+`uv.lock` records the exact commit resolved from each tracked branch, and the
+provenance gate compares the active installation with that locked commit.
 
 The authoritative model contract is
 [`zai-org/GLM-5.3-Flash`](https://huggingface.co/zai-org/GLM-5.3-Flash).
@@ -40,7 +43,7 @@ MODEL_PATH=/path/to/GLM-5.3-Flash-tiny \
 Both scripts default to `uv run --frozen` and their matching extra. Set
 `VERL_USE_UV=0` only when running inside an already-provisioned development
 environment; the provenance gate still requires the active modules to resolve
-to the exact commits above.
+to the exact commits in `uv.lock`.
 
 The GRPO script keeps the production TileLang DSA backend enabled. On CUDA 12
 hosts whose default GCC is newer than 12, it selects an installed `g++-12` or
