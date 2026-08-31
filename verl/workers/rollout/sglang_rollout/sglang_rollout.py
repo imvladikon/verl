@@ -129,7 +129,13 @@ class ServerAdapter(BaseRollout):
         replica_rank: int = -1,
     ):
         super().__init__(config, model_config, device_mesh)
-        if self.config.get("quantization", None) == "fp8":
+        from verl.utils.sglang.sglang_fp8_utils import is_sglang_fp8_quant_config
+
+        checkpoint_quant_config = getattr(self.model_config.hf_config, "quantization_config", None)
+        self._use_fp8_weight_sync = self.config.get("quantization", None) == "fp8" or is_sglang_fp8_quant_config(
+            checkpoint_quant_config
+        )
+        if self._use_fp8_weight_sync:
             import sglang
             from packaging import version
 
@@ -356,7 +362,7 @@ class ServerAdapter(BaseRollout):
                 await self._engine.load_lora_adapter_from_tensor(req)
         else:
             update_weights_bucket_bytes = int(self.config.checkpoint_engine.update_weights_bucket_megabytes) << 20
-            if self.config.get("quantization", None) == "fp8":
+            if getattr(self, "_use_fp8_weight_sync", self.config.get("quantization", None) == "fp8"):
                 from verl.utils.sglang.sglang_fp8_utils import SGLangFP8QuantizerHelper
 
                 logger.info("Convert bf16 weights to fp8 format before loading")

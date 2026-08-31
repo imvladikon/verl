@@ -17,7 +17,11 @@ from types import SimpleNamespace
 
 import torch
 
-from verl.utils.sglang.sglang_fp8_utils import SGLangFP8QuantizerHelper, build_sglang_fp8_quant_config
+from verl.utils.sglang.sglang_fp8_utils import (
+    SGLangFP8QuantizerHelper,
+    build_sglang_fp8_quant_config,
+    is_sglang_fp8_quant_config,
+)
 
 
 class MappingLikeConfig:
@@ -39,6 +43,13 @@ def test_build_sglang_fp8_quant_config_preserves_defaults(monkeypatch):
         "quant_method": "fp8",
         "weight_block_size": [128, 128],
     }
+
+
+def test_sglang_fp8_quant_config_detection():
+    assert is_sglang_fp8_quant_config({"quant_method": "fp8"})
+    assert is_sglang_fp8_quant_config(MappingLikeConfig({"quant_method": "FP8"}))
+    assert not is_sglang_fp8_quant_config(None)
+    assert not is_sglang_fp8_quant_config({"quant_method": "compressed-tensors"})
 
 
 def test_sglang_fp8_quant_config_merges_hf_ignored_layers(monkeypatch):
@@ -183,3 +194,27 @@ def test_glm53_mixed_bf16_to_fp8_stream_keeps_ignored_layers_bf16(monkeypatch):
     for row in range(2):
         reconstructed[row * 128 : (row + 1) * 128] = quantized[row * 128 : (row + 1) * 128].float() * scales[row, 0]
     torch.testing.assert_close(reconstructed, dense.float(), rtol=0.07, atol=0.03)
+
+
+def test_sglang_fp8_quantizer_does_not_silently_send_bf16(monkeypatch):
+    helper = SGLangFP8QuantizerHelper(build_sglang_fp8_quant_config())
+    monkeypatch.setattr(
+        "verl.utils.fp8_utils.scaled_fp8_blockwise",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unsupported fp8 cast")),
+    )
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+
+    async def collect():
+        return [
+            item
+            async for item in helper.quant_weights_by_name(
+                [("model.layers.0.mlp.gate_proj.weight", torch.ones(128, 128, dtype=torch.bfloat16))]
+            )
+        ]
+
+    try:
+        asyncio.run(collect())
+    except RuntimeError as error:
+        assert "model.layers.0.mlp.gate_proj.weight" in str(error)
+    else:
+        raise AssertionError("FP8 conversion failure was silently replaced with BF16")

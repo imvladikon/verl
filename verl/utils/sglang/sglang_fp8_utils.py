@@ -70,6 +70,12 @@ def get_sglang_fp8_ignored_layers(quant_config: Any = None) -> list[str]:
     return _dedupe_layers(ignored_layers)
 
 
+def is_sglang_fp8_quant_config(quant_config: Any) -> bool:
+    """Return whether a checkpoint already declares an FP8 rollout layout."""
+    quant_method = _get_config_value(quant_config, "quant_method")
+    return isinstance(quant_method, str) and quant_method.lower() == "fp8"
+
+
 def _path_aliases(path: str) -> set[str]:
     """Return equivalent HF/SGLang module paths for an ignore rule."""
     path = path.lower().strip(".")
@@ -151,6 +157,9 @@ class SGLangFP8QuantizerHelper(FP8QuantizerHelper):
 
     def __init__(self, quant_config):
         super().__init__(quant_config)
+        # Sending the original BF16 tensor after a failed conversion only moves
+        # the failure to SGLang's dtype guard and can partially update a model.
+        self.raise_on_quantization_error = True
         self.ignored_layers = get_sglang_fp8_ignored_layers(quant_config)
         self._ignored_exact = set()
         self._ignored_regex = []
@@ -162,16 +171,10 @@ class SGLangFP8QuantizerHelper(FP8QuantizerHelper):
 
     def _is_ignored_param(self, param_name: str) -> bool:
         candidates = _module_path_candidates(param_name)
-        if any(
-            pattern.match(candidate)
-            for pattern in self._ignored_regex
-            for candidate in candidates
-        ):
+        if any(pattern.match(candidate) for pattern in self._ignored_regex for candidate in candidates):
             return True
         return any(
-            subpath in self._ignored_exact
-            for candidate in candidates
-            for subpath in _dot_path_substrings(candidate)
+            subpath in self._ignored_exact for candidate in candidates for subpath in _dot_path_substrings(candidate)
         )
 
     def should_quantize_param(self, param_name):
