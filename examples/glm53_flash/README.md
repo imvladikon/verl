@@ -57,8 +57,22 @@ those paths load, backpropagate, update, checkpoint, roll out, and accept
 weight refreshes. It does not by itself prove the memory fit of the 744B
 production checkpoint; that requires a separate topology and memory budget.
 
-Megatron-Core is pinned because it is a dependency of the supported stacks and
-its GLM mHC/recompute/routing-replay changes are tested in that fork. This
-example does not claim an end-to-end Megatron actor: that path also needs a
-GLM-5.3-Flash Megatron-Bridge model provider and checkpoint mapping, which is
-not yet a user-owned pinned dependency.
+To distinguish real sharding from the world-size-one `NO_SHARD` fallback, run
+one CPU optimizer step with multiple FSDP ranks:
+
+```bash
+torchrun --standalone --nproc-per-node=4 \
+  examples/glm53_flash/run_cpu_fsdp_sharding_smoke.py \
+  --model /path/to/GLM-5.3-Flash-sharding-twin \
+  --output /tmp/glm53-fsdp-sharding.json
+```
+
+The report fails unless every rank owns only its physical `FULL_SHARD` slice,
+the distributed gradient is finite and nonzero, and the optimizer changes the
+shards. This CPU gate isolates FSDP correctness; it is not a substitute for a
+multi-GPU TP/EP throughput test.
+
+Megatron-Core is branch-tracked because it is a dependency of the supported
+stacks and its GLM mHC/recompute/routing-replay changes are tested in that
+fork. This example does not claim an end-to-end Megatron actor: that path also
+needs a GLM-5.3-Flash Megatron-Bridge model provider and checkpoint mapping.
