@@ -5239,8 +5239,8 @@ wheels = [
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev17549+gfde3b60ed"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.3-flash#fde3b60ed22a6bd7f760e94b3d2fadf170a64a1c" }
+version = "0.0.0.dev17550+g3524cacbe"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.3-flash#3524cacbed4efaa3b3544d0680a178890016454a" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -6805,7 +6805,7 @@ glm53-flash = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm53-flash' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm53-flash' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev17549+gfde3b60ed", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.3-flash#fde3b60ed22a6bd7f760e94b3d2fadf170a64a1c" } },
+    { name = "sglang", version = "0.0.0.dev17550+g3524cacbe", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.3-flash#3524cacbed4efaa3b3544d0680a178890016454a" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
