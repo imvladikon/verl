@@ -57,6 +57,38 @@ those paths load, backpropagate, update, checkpoint, roll out, and accept
 weight refreshes. It does not by itself prove the memory fit of the 744B
 production checkpoint; that requires a separate topology and memory budget.
 
+## One-GPU 9B surgery smoke
+
+The tiny lifecycle is an interface gate, not a numerical proxy for the 9B
+surgery checkpoint. In particular, the tiny run uses a much larger learning
+rate, does not create multi-billion-element FSDP flat parameters, and does not
+exercise the same block-quantized FP8 weight-refresh path. Use the separate 9B
+smoke on an otherwise free A100-80G:
+
+```bash
+CUDA_VISIBLE_DEVICES=5 \
+MODEL_PATH=/path/to/GLM-5.3-Flash-9B-Surgery-Dummy \
+  examples/glm53_flash/run_glm53_flash_9b_smoke.sh
+```
+
+This profile keeps the actor in BF16, dequantizes the FP8 checkpoint at load,
+and requantizes actor updates for the SGLang rollout. At the tested learning
+rate of `1e-6`, nearest-rounded BF16 AdamW discards most sampled updates. The
+profile therefore uses TorchAO `AdamW8bit` with BF16 stochastic rounding and
+`use_orig_params=true`. The latter is required here: TorchAO only quantizes an
+optimizer buffer when its size is divisible by the 256-element block, while
+the default FSDP flat-buffer lengths are not. In the two-step qualification,
+202 parameters covering 8,895,656,704 elements used real `OptimState8bit`
+first- and second-moment buffers; the 75 small fallback parameters covered only
+15,036 elements. Both steps had finite gradients and completed rollout weight
+sync.
+
+The script intentionally does not save checkpoints: each BF16 actor snapshot
+is about 18 GB. It is a one-GPU integration and gradient-flow smoke, not an
+optimizer recommendation for the 744B production model. Production training
+needs a sharded optimizer with an explicit master-weight/rounding policy and a
+separate TP/EP memory qualification.
+
 To distinguish real sharding from the world-size-one `NO_SHARD` fallback, run
 one CPU optimizer step with multiple FSDP ranks:
 
