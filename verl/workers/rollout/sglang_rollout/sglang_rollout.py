@@ -15,6 +15,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import inspect
 import logging
 import multiprocessing as mp
 import os
@@ -61,6 +62,25 @@ def _to_ipc_device(tensor: torch.Tensor) -> torch.Tensor:
     """Move a CPU tensor to the device, one at a time: sglang's IPC patch indexes a reducer slot
     that only device tensors have."""
     return tensor.to(get_device_id(), non_blocking=True) if tensor.device.type == "cpu" else tensor
+
+
+def _assert_sglang_weight_sync_capabilities() -> None:
+    """Validate the API we use without trusting setuptools-scm's fallback version.
+
+    PEP 508 builds from ``git+...#subdirectory=python`` may not contain SGLang's
+    tags and are consequently published as ``0.0.0.dev*`` even when the source
+    is newer than the former 0.5.5 minimum.
+    """
+    required = {"engine", "params_batch", "device_mesh_key", "device_mesh", "flush_cache"}
+    available = set(inspect.signature(sgl_update_weights).parameters)
+    missing = sorted(required - available)
+    if missing:
+        import sglang
+
+        raise RuntimeError(
+            "Installed SGLang does not provide the weight-sync API required for FP8 rollout: "
+            f"missing {missing}; reported version={sglang.__version__!r}"
+        )
 
 
 # patch to avoid issue https://github.com/sgl-project/sglang/issues/6723
@@ -136,14 +156,9 @@ class ServerAdapter(BaseRollout):
             checkpoint_quant_config
         )
         if self._use_fp8_weight_sync:
-            import sglang
-            from packaging import version
-
             from verl.utils.sglang.sglang_fp8_utils import build_sglang_fp8_quant_config
 
-            assert version.parse(sglang.__version__) >= version.parse("0.5.5"), (
-                "sglang>=0.5.5 is required for FP8 quantization"
-            )
+            _assert_sglang_weight_sync_capabilities()
             fp8_block_quant_kwargs = build_sglang_fp8_quant_config(self.model_config.hf_config)
             self.model_config.hf_config.quantization_config = fp8_block_quant_kwargs
         self._engine: AsyncHttpServerAdapter = None
