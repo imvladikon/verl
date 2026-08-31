@@ -48,6 +48,20 @@ def is_triton_available() -> bool:
     return _TRITON_AVAILABLE
 
 
+def _can_use_triton_e4m3fn(data_hp: torch.Tensor) -> bool:
+    """Whether Triton can compile the E4M3FN cast for this tensor's GPU.
+
+    CUDA SM80--SM86 can store FP8 tensors but Triton cannot lower its
+    ``fp8e4nv`` conversion there.  Falling back to the torch implementation is
+    required for A100 and Ampere RTX trainer-to-rollout quantization.
+    """
+    if not _TRITON_AVAILABLE or _DISABLE_TRITON_FP8 or data_hp.device.type != "cuda":
+        return False
+    if torch.version.hip is not None:
+        return True
+    return torch.cuda.get_device_capability(data_hp.device) >= (8, 9)
+
+
 if _TRITON_AVAILABLE:
 
     @triton.jit
@@ -334,7 +348,7 @@ def scaled_fp8_blockwise(
     assert len(data_hp.shape) == 2, "Only 2d input tensor is supported"
 
     # Use Triton kernel if available and not disabled
-    if _TRITON_AVAILABLE and not _DISABLE_TRITON_FP8:
+    if _can_use_triton_e4m3fn(data_hp):
         return scaled_fp8_blockwise_triton(data_hp, weight_block_size)
 
     # PyTorch fallback implementation (memory-optimized)
