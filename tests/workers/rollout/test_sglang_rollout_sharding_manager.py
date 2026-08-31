@@ -87,6 +87,24 @@ def test_compact_for_bucket_clones_non_contiguous_tensor():
     assert torch.equal(out, tensor)
 
 
+def test_sglang_git_fallback_version_uses_capability_check(monkeypatch):
+    monkeypatch.setattr(sglang_rollout.sglang, "__version__", "0.0.0.dev17566+g3ffe6309e")
+
+    # The reported SCM fallback version is intentionally irrelevant when the
+    # installed function exposes the complete API used below.
+    sglang_rollout._assert_sglang_weight_sync_capabilities()
+
+
+def test_sglang_weight_sync_capability_check_reports_missing_api(monkeypatch):
+    async def old_update_weights(engine, params_batch, device_mesh_key, device_mesh):
+        return None
+
+    monkeypatch.setattr(sglang_rollout, "sgl_update_weights", old_update_weights)
+
+    with pytest.raises(RuntimeError, match="flush_cache"):
+        sglang_rollout._assert_sglang_weight_sync_capabilities()
+
+
 @pytest.mark.asyncio
 async def test_get_named_tensor_buckets_preserves_values():
     # The conditional clone must not change the data that ends up in the buckets.
