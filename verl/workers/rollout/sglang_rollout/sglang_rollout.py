@@ -382,7 +382,18 @@ class ServerAdapter(BaseRollout):
                     params_batch=[(_strip_lora_base_layer(name), _to_ipc_device(t)) for name, t in params_batch],
                     device_mesh_key="infer_tp",
                     device_mesh=self.device_mesh,
+                    flush_cache=False,
                 )
+            # Finalize layer-wise kernel repacking only after every bucket has
+            # arrived. An empty request avoids retaining a second full bucket
+            # merely to discover which data bucket is last.
+            await sgl_update_weights(
+                engine=self._engine,
+                params_batch=[],
+                device_mesh_key="infer_tp",
+                device_mesh=self.device_mesh,
+                flush_cache=True,
+            )
 
         if self._engine is not None and self._is_server_tp_leader():
             await self._engine.flush_cache()
