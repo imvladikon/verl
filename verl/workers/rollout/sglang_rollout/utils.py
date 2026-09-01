@@ -38,6 +38,39 @@ DEEPSEEK_V4_FUSION_GROUPS = tuple(
     for members in _DEEPSEEK_V4_FUSION_MEMBERS
 )
 
+# DeepseekV2WeightLoaderMixin creates these destination parameters by combining
+# several HF tensors inside one load_weights() call. Bucketing must therefore
+# keep each source set atomic. On CUDA, the GLM DSA indexer also fuses wk and
+# weights_proj into one BF16 parameter; an FP8 wk needs its scale before that
+# fused parameter can be materialized.
+GLM_MOE_DSA_BF16_FUSION_GROUPS = (
+    (
+        ".self_attn.q_a_proj.weight",
+        ".self_attn.kv_a_proj_with_mqa.weight",
+    ),
+    (
+        ".self_attn.indexer.wk.weight",
+        ".self_attn.indexer.weights_proj.weight",
+    ),
+)
+GLM_MOE_DSA_FP8_FUSION_GROUPS = (
+    (
+        ".self_attn.q_a_proj.weight",
+        ".self_attn.q_a_proj.weight_scale_inv",
+        ".self_attn.kv_a_proj_with_mqa.weight",
+        ".self_attn.kv_a_proj_with_mqa.weight_scale_inv",
+    ),
+    (
+        ".self_attn.indexer.wk.weight",
+        ".self_attn.indexer.wk.weight_scale_inv",
+        ".self_attn.indexer.weights_proj.weight",
+    ),
+    (
+        ".self_attn.kv_b_proj.weight",
+        ".self_attn.kv_b_proj.weight_scale_inv",
+    ),
+)
+
 
 def _fusion_key(name: str, groups: tuple[tuple[str, ...], ...]):
     matches = [

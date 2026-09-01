@@ -43,6 +43,8 @@ from verl.workers.rollout.base import BaseRollout
 from verl.workers.rollout.sglang_rollout.http_server_engine import AsyncHttpServerAdapter
 from verl.workers.rollout.sglang_rollout.utils import (
     DEEPSEEK_V4_FUSION_GROUPS,
+    GLM_MOE_DSA_BF16_FUSION_GROUPS,
+    GLM_MOE_DSA_FP8_FUSION_GROUPS,
     SGLANG_LORA_NAME,
     get_named_tensor_buckets,
     lora_served_as_adapter,
@@ -390,11 +392,18 @@ class ServerAdapter(BaseRollout):
             else:
                 weights = weights
 
-            fusion_groups = (
-                DEEPSEEK_V4_FUSION_GROUPS
-                if getattr(self.model_config.hf_config, "model_type", None) == "deepseek_v4"
-                else ()
-            )
+            model_type = getattr(self.model_config.hf_config, "model_type", None)
+            if model_type == "deepseek_v4":
+                fusion_groups = DEEPSEEK_V4_FUSION_GROUPS
+            elif model_type == "glm_moe_dsa":
+                use_fp8_weight_sync = getattr(
+                    self,
+                    "_use_fp8_weight_sync",
+                    self.config.get("quantization", None) == "fp8",
+                )
+                fusion_groups = GLM_MOE_DSA_FP8_FUSION_GROUPS if use_fp8_weight_sync else GLM_MOE_DSA_BF16_FUSION_GROUPS
+            else:
+                fusion_groups = ()
             async for params_batch in get_named_tensor_buckets(
                 weights, update_weights_bucket_bytes, fusion_groups=fusion_groups
             ):
