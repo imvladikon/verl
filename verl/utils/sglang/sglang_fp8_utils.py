@@ -149,10 +149,17 @@ def build_sglang_fp8_quant_config(hf_config: Any = None, ignored_layers: Any = N
 
 
 class SGLangFP8QuantizerHelper(FP8QuantizerHelper):
-    _GLM_MLA_FP8_PROJECTIONS = (
-        "q_a_proj",
-        "q_b_proj",
-        "kv_a_proj_with_mqa",
+    # These GLM MLA/DSA weights are block-FP8 in the released checkpoints but
+    # do not match the generic q_proj/k_proj/v_proj/o_proj whitelist.  Match
+    # complete suffixes so similarly named norms, biases, and indexer output
+    # projections remain in their checkpoint dtype.
+    _GLM_FP8_WEIGHT_SUFFIXES = (
+        ".self_attn.q_a_proj.weight",
+        ".self_attn.q_b_proj.weight",
+        ".self_attn.kv_a_proj_with_mqa.weight",
+        ".self_attn.kv_b_proj.weight",
+        ".self_attn.indexer.wk.weight",
+        ".self_attn.indexer.wq_b.weight",
     )
 
     def __init__(self, quant_config):
@@ -181,8 +188,6 @@ class SGLangFP8QuantizerHelper(FP8QuantizerHelper):
         if self._is_ignored_param(param_name):
             return False
         param_lower = param_name.lower()
-        if param_lower.endswith(".weight") and any(
-            projection in param_lower for projection in self._GLM_MLA_FP8_PROJECTIONS
-        ):
+        if param_lower.endswith(self._GLM_FP8_WEIGHT_SUFFIXES):
             return True
         return super().should_quantize_param(param_name)

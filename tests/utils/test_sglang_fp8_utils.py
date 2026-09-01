@@ -124,6 +124,34 @@ def test_sglang_fp8_quantizer_includes_glm53_flash_dsa_projections(monkeypatch):
             assert helper.should_quantize_param(f"model.language_model.layers.{layer_id}.self_attn.{projection}.weight")
 
 
+def test_sglang_fp8_quantizer_matches_glm_moe_dsa_checkpoint_contract(monkeypatch):
+    """Cover FP8 names that the generic linear-layer whitelist cannot see."""
+    monkeypatch.delenv("SGLANG_FP8_IGNORED_LAYERS", raising=False)
+    helper = SGLangFP8QuantizerHelper(build_sglang_fp8_quant_config())
+
+    for projection in (
+        "q_a_proj",
+        "q_b_proj",
+        "kv_a_proj_with_mqa",
+        "kv_b_proj",
+        "indexer.wk",
+        "indexer.wq_b",
+    ):
+        assert helper.should_quantize_param(f"model.layers.0.self_attn.{projection}.weight")
+
+    # The released GLM-5.3 checkpoint deliberately leaves these tensors out
+    # of block-FP8 conversion.
+    for parameter in (
+        "model.layers.0.self_attn.indexer.weights_proj.weight",
+        "model.layers.0.self_attn.indexer.k_norm.weight",
+        "model.layers.0.self_attn.indexer.k_norm.bias",
+        "model.layers.0.self_attn.q_a_layernorm.weight",
+        "model.layers.0.mlp.gate.weight",
+        "model.layers.0.mlp.gate.e_score_correction_bias",
+    ):
+        assert not helper.should_quantize_param(parameter)
+
+
 def test_sglang_fp8_quantizer_matches_regex_ignored_layers(monkeypatch):
     monkeypatch.delenv("SGLANG_FP8_IGNORED_LAYERS", raising=False)
     hf_config = SimpleNamespace(
