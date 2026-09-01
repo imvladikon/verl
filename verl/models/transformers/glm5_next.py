@@ -17,6 +17,65 @@ import torch
 import torch.nn.functional as F
 
 
+def _causal_decay_products(
+    k_beta: torch.Tensor,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    g: torch.Tensor,
+    block_size: int = 8,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute causal KDA products without a full pairwise decay tensor.
+
+    Cross-block decay factorizes around ``g[mid]`` as
+    ``exp(g_i - g_j) = exp(g_i - g_mid) * exp(g_mid - g_j)``. Since cumulative
+    GLM log-decay is monotone, both factors are at most one. Only small diagonal
+    blocks retain a pairwise tensor, with future positions masked before
+    exponentiation.
+    """
+    chunk_size = g.shape[-2]
+    akk = g.new_zeros(*g.shape[:-1], chunk_size)
+    aqk = g.new_zeros(*g.shape[:-1], chunk_size)
+    non_causal = torch.ones(
+        block_size, block_size, dtype=torch.bool, device=g.device
+    ).triu(1)
+
+    def fill(lo: int, hi: int) -> None:
+        size = hi - lo
+        if size <= block_size:
+            g_block = g[..., lo:hi, :]
+            decay = (
+                (g_block.unsqueeze(-2) - g_block.unsqueeze(-3))
+                .masked_fill(non_causal[:size, :size, None], float("-inf"))
+                .exp()
+            )
+            keys = key[..., lo:hi, :].unsqueeze(-3)
+            akk[..., lo:hi, lo:hi] = (
+                k_beta[..., lo:hi, :].unsqueeze(-2) * keys * decay
+            ).sum(dim=-1).tril(-1)
+            aqk[..., lo:hi, lo:hi] = (
+                query[..., lo:hi, :].unsqueeze(-2) * keys * decay
+            ).sum(dim=-1)
+            return
+
+        mid = (lo + hi) // 2
+        fill(lo, mid)
+        fill(mid, hi)
+        anchor = g[..., mid : mid + 1, :]
+        row_decay = (g[..., mid:hi, :] - anchor).exp()
+        scaled_key = (
+            key[..., lo:mid, :] * (anchor - g[..., lo:mid, :]).exp()
+        ).transpose(-1, -2)
+        akk[..., mid:hi, lo:mid] = (
+            k_beta[..., mid:hi, :] * row_decay
+        ) @ scaled_key
+        aqk[..., mid:hi, lo:mid] = (
+            query[..., mid:hi, :] * row_decay
+        ) @ scaled_key
+
+    fill(0, chunk_size)
+    return akk, aqk
+
+
 def _safe_eager_chunk_kimi_delta_attention(
     query,
     key,
@@ -29,14 +88,12 @@ def _safe_eager_chunk_kimi_delta_attention(
     use_qk_l2norm_in_kernel=False,
     **kwargs,
 ):
-    """Torch KDA reference with causal decay masked before exponentiation.
+    """Torch KDA reference with stable, blockwise causal decay products.
 
-    Transformers 5.16.1 masks future positions only after ``exp(g_i - g_j)``.
-    With GLM's gate lower bound of -5 and a 64-token chunk, those unused
-    positions can reach ``exp(315)``. The forward mask hides the infinities,
-    but autograd then evaluates ``0 * inf`` and produces NaN query/key
-    gradients. Pre-masking the exponent preserves every causal value while
-    making the backward pass finite.
+    Transformers 5.16.1 materializes a pairwise per-channel decay tensor and
+    exponentiates future positions before masking them. This implementation
+    avoids both the resulting ``0 * inf`` gradients and the quadratic channel
+    tensor by using local-reference block factorization.
     """
     from transformers.models.glm5_next.modeling_glm5_next import l2norm
 
@@ -71,13 +128,8 @@ def _safe_eager_chunk_kimi_delta_attention(
     beta = beta.reshape(beta.shape[0], beta.shape[1], -1, chunk_size)
 
     g = g.cumsum(dim=-2)
-    diagonal_mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=0)
-    future_mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=query.device), diagonal=1)
-    decay_delta = g.unsqueeze(-2) - g.unsqueeze(-3)
-    decay_delta = decay_delta.masked_fill(future_mask.unsqueeze(-1), 0.0)
-    decay_mask = decay_delta.exp().float().masked_fill(future_mask.unsqueeze(-1), 0.0)
-
-    attn = -(k_beta.unsqueeze(-2) * key.unsqueeze(-3) * decay_mask).sum(dim=-1).masked_fill(diagonal_mask, 0)
+    akk, aqk = _causal_decay_products(k_beta, query, key, g)
+    attn = -akk
     for index in range(1, chunk_size):
         row = attn[..., index, :index].clone()
         sub = attn[..., :index, :index].clone()
@@ -101,9 +153,7 @@ def _safe_eager_chunk_kimi_delta_attention(
         g_i = g[:, :, index]
 
         attn_inter = (q_i * g_i.exp()) @ last_recurrent_state
-        attn_intra = (
-            (q_i.unsqueeze(-2) * k_i.unsqueeze(-3) * decay_mask[:, :, index]).sum(dim=-1).masked_fill(future_mask, 0)
-        )
+        attn_intra = aqk[:, :, index]
         v_prime = k_cumdecay[:, :, index] @ last_recurrent_state
         v_new = v_i - v_prime
 
@@ -132,7 +182,10 @@ def _native_fla_kda_available() -> bool:
 
 def patch_glm5_next_eager_kda(model) -> bool:
     """Patch only the plain Torch fallback, preserving configured KDA kernels."""
-    if getattr(model.config, "model_type", None) != "glm5_next":
+    if getattr(model.config, "model_type", None) not in {
+        "glm5_next",
+        "glm5_next_text",
+    }:
         return False
     if getattr(model, "_use_kernels", False) or getattr(model, "kernel_config", None) is not None:
         return False

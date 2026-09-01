@@ -6,6 +6,50 @@ import torch
 from verl.models.transformers import glm5_next
 
 
+def _pairwise_causal_decay_products(k_beta, query, key, g):
+    chunk_size = g.shape[-2]
+    future = torch.ones(
+        chunk_size, chunk_size, dtype=torch.bool, device=g.device
+    ).triu(1)
+    decay = (
+        (g.unsqueeze(-2) - g.unsqueeze(-3))
+        .masked_fill(future[..., None], float("-inf"))
+        .exp()
+    )
+    keys = key.unsqueeze(-3)
+    akk = (k_beta.unsqueeze(-2) * keys * decay).sum(dim=-1).tril(-1)
+    aqk = (query.unsqueeze(-2) * keys * decay).sum(dim=-1)
+    return akk, aqk
+
+
+def test_blockwise_decay_products_match_pairwise_values_and_gradients():
+    torch.manual_seed(11)
+    shape = (1, 2, 11, 5)
+    tensors = [
+        torch.randn(shape, dtype=torch.float64, requires_grad=True)
+        for _ in range(3)
+    ]
+    negative_steps = -torch.rand(shape, dtype=torch.float64, requires_grad=True)
+    g = negative_steps.cumsum(dim=-2)
+    probes = [
+        torch.randn(1, 2, 11, 11, dtype=torch.float64),
+        torch.randn(1, 2, 11, 11, dtype=torch.float64),
+    ]
+
+    actual = glm5_next._causal_decay_products(*tensors, g, block_size=4)
+    expected = _pairwise_causal_decay_products(*tensors, g)
+    for actual_value, expected_value in zip(actual, expected, strict=True):
+        torch.testing.assert_close(actual_value, expected_value, rtol=1e-12, atol=1e-12)
+
+    actual_loss = sum((value * probe).sum() for value, probe in zip(actual, probes, strict=True))
+    expected_loss = sum((value * probe).sum() for value, probe in zip(expected, probes, strict=True))
+    variables = (*tensors, negative_steps)
+    actual_grads = torch.autograd.grad(actual_loss, variables, retain_graph=True)
+    expected_grads = torch.autograd.grad(expected_loss, variables)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-11, atol=1e-11)
+
+
 def test_safe_eager_kda_masks_future_decay_before_exp():
     torch.manual_seed(17)
     batch, sequence, heads, key_dim, value_dim = 1, 64, 2, 8, 8

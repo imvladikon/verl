@@ -314,7 +314,7 @@ def apply_monkey_patch(
         tiled_mlp_shards: Number of shards for TiledMLP (higher = lower memory, slightly slower).
     """
 
-    if getattr(model.config, "model_type", None) == "glm5_next":
+    if getattr(model.config, "model_type", None) in {"glm5_next", "glm5_next_text"}:
         from verl.models.transformers.glm5_next import patch_glm5_next_eager_kda
 
         if patch_glm5_next_eager_kda(model):
