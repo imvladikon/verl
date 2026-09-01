@@ -118,6 +118,7 @@ PY
   +actor_rollout_ref.rollout.engine_kwargs.sglang.dsa_topk_backend=torch \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.linear_attn_backend=triton \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.moe_runner_backend=triton \
+  +actor_rollout_ref.rollout.engine_kwargs.sglang.enable_weights_cpu_backup=false \
   reward.custom_reward_function.path="${repo_root}/examples/glm53_flash/reward.py" \
   reward.custom_reward_function.name=compute_score \
   reward.reward_manager.name=naive \

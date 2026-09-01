@@ -70,6 +70,15 @@ logger.setLevel(logging.INFO)
 visible_devices_keyword = get_visible_devices_keyword()
 
 
+def _set_default_weights_cpu_backup(
+    args: dict[str, Any], *, rollout_mode: RolloutMode, lora_rank: int
+) -> None:
+    args.setdefault(
+        "enable_weights_cpu_backup",
+        rollout_mode in (RolloutMode.COLOCATED, RolloutMode.HYBRID) or lora_rank > 0,
+    )
+
+
 def _normalize_sglang_launch_result(launch_result: tuple) -> tuple[Any, Any, dict, tuple]:
     """Normalize legacy and current SGLang subprocess-launch return layouts."""
     if len(launch_result) < 3:
@@ -391,12 +400,15 @@ class SGLangHttpServer:
             #      from CPU before applying the latest trainer weights via IPC.
             # Without this, sleep() releases GPU memory but update_weights() cannot restore
             # the weight buffers, causing OOM when training tries to use the freed memory.
-            enable_weights_cpu_backup = (
-                True
-                if self.rollout_mode in (RolloutMode.COLOCATED, RolloutMode.HYBRID) or self.model_config.lora_rank > 0
-                else False
+            # Preserve an explicit engine override. Full-weight RL syncs can
+            # safely disable the CPU mirror because every wake is followed by
+            # a complete trainer-to-rollout update; backing up very large
+            # checkpoints would otherwise pin a second copy of all weights.
+            _set_default_weights_cpu_backup(
+                args,
+                rollout_mode=self.rollout_mode,
+                lora_rank=self.model_config.lora_rank,
             )
-            args["enable_weights_cpu_backup"] = enable_weights_cpu_backup
 
         if self._disaggregation_role != "null":
             disagg = self.config.disaggregation
