@@ -28,6 +28,24 @@ validation and 32 test. Only four candidates explicitly require Markdown
 but cannot by themselves solve the Markdown defect. A separate reviewed,
 deterministic targeted set is required before the full-model experiment.
 
+## Project-authored targeted set
+
+`generate_targeted_quality_data.py` creates `targeted-template-v1` without a
+teacher model. Each target is an exact rendering or correction of data already
+present in its prompt. It emits 720 rows split by semantic group, including
+416 Markdown-required rows, 128 accidental-Han removal rows, 48 controls that
+preserve Han inside code, blockquotes, or URLs, and 32 controls that preserve
+intentional Chinese text. All rows carry project-authored Apache-2.0
+provenance and the explicit review method `deterministic-template-audit`.
+
+The validated artifact has dataset SHA-256
+`e60cc63ac674b45a5bdc45c3d068e76058024c237a29331c6d56b02bebaf20c4`.
+Using the exact surgery-checkpoint tokenizer, its full chat sequences have
+p95 166, p99 180, and maximum 187 tokens. The targeted set can be trained and
+evaluated independently as a diagnostic, but a quality adapter must combine
+it with accepted human-reviewed general-Russian rows and preserve separate
+held-out results for each failure family.
+
 ## Excluded from the first mixture
 
 - [IlyaGusev/ru_turbo_alpaca](https://huggingface.co/datasets/IlyaGusev/ru_turbo_alpaca):

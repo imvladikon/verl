@@ -179,6 +179,7 @@ def _candidate(
         "review": {
             "status": "pending",
             "reviewer": None,
+            "method": "human",
             "notes": "",
         },
         "provenance": {

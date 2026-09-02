@@ -105,6 +105,15 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         review_notes = review.get("notes", "")
         if not isinstance(review_notes, str):
             raise TypeError(f"{example_id}: review.notes must be a string")
+        default_review_method = "schema-fixture" if reviewer.strip() == "schema-fixture" else "human"
+        review_method = review.get("method", default_review_method)
+        if review_method not in {
+            "human",
+            "source-human-ratings",
+            "deterministic-template-audit",
+            "schema-fixture",
+        }:
+            raise ValueError(f"{example_id}: unsupported review.method: {review_method!r}")
         provenance = raw.get("provenance")
         if not isinstance(provenance, dict):
             raise TypeError(f"{example_id}: provenance must be an object")
@@ -140,6 +149,7 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "status": "accepted",
                     "reviewer": reviewer.strip(),
                     "notes": review_notes,
+                    "method": review_method,
                 },
                 "provenance": {field: provenance[field].strip() for field in required_provenance},
                 "prompt_sha256": digest,

@@ -77,6 +77,7 @@ def test_aya_candidate_is_filtered_and_keeps_pinned_provenance() -> None:
     assert reason is None
     assert candidate is not None
     assert candidate["review"]["status"] == "pending"
+    assert candidate["review"]["method"] == "human"
     assert candidate["provenance"]["revision"] == SOURCE_LOCKS["aya"].revision
     assert candidate["provenance"]["source_record_id"] == "row:17"
 

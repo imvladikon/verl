@@ -97,6 +97,36 @@ them until a named reviewer changes the status to `accepted`. Source locks,
 selection policy and explicit exclusions are documented in
 [`QUALITY_SOURCES.md`](QUALITY_SOURCES.md).
 
+Generate the separate teacher-free targeted set for the three failure modes:
+
+```bash
+python examples/glm52_lora/generate_targeted_quality_data.py \
+  runs/glm52-targeted-quality
+```
+
+It contains 720 deterministic transformations of facts already present in the
+prompt: 128 natural-Russian rewrites, 384 Markdown renderings, 32 additional
+Markdown/code controls, 128 accidental-Han removals, 48 Han scope controls,
+and 32 intentional-Chinese retention controls. Semantic groups, not prompt
+wordings, determine the 540/90/90 train/validation/test split. This set targets
+specific behavior; it is not a substitute for reviewed general-Russian data.
+
+Measure the generated rows with the exact checkpoint tokenizer and chat
+template before choosing a sequence length:
+
+```bash
+python examples/glm52_lora/audit_quality_tokens.py \
+  runs/glm52-targeted-quality/targeted_quality.jsonl \
+  /path/to/GLM-5.2-tokenizer \
+  --output runs/glm52-targeted-quality/token_audit.json
+```
+
+The pinned surgery tokenizer audit of `targeted-template-v1` measured 79,674
+full-chat tokens. Full-chat length was p50 105, p95 166, p99 180, and maximum
+187 tokens, so sequence length 256 covers this targeted set without
+truncation. Re-run the audit after adding reviewed public-source rows; those
+lengths are not covered by this measurement.
+
 The builder rejects unreviewed rows, missing provenance, duplicate/leaking
 prompts across splits, accidental Han in Russian targets, structurally broken
 Markdown, and Russian targets without Cyrillic. It writes SFT parquet files,

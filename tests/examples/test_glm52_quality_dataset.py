@@ -32,7 +32,12 @@ def _row(
         "response": response,
         "contract": {"requested_language": "ru", "allow_han": False},
         "use_for_constraint_rl_smoke": use_for_rl,
-        "review": {"status": "accepted", "reviewer": "unit-test", "notes": ""},
+        "review": {
+            "status": "accepted",
+            "reviewer": "unit-test",
+            "method": "schema-fixture",
+            "notes": "",
+        },
         "provenance": {
             "dataset": "project-authored/unit-test",
             "revision": "1",
@@ -124,8 +129,20 @@ def test_ambiguous_schema_values_are_rejected(field: str, value: object, error: 
 
 def test_pending_review_cannot_be_converted_to_training_data() -> None:
     row = _row("pending", "train", "Ответь", "Это проверяемый русский ответ.")
-    row["review"] = {"status": "pending", "reviewer": None, "notes": ""}
+    row["review"] = {
+        "status": "pending",
+        "reviewer": None,
+        "method": "human",
+        "notes": "",
+    }
     with pytest.raises(ValueError, match="review status must be accepted"):
+        validate_rows([row])
+
+
+def test_unknown_review_method_is_rejected() -> None:
+    row = _row("review-method", "train", "Ответь", "Это проверяемый русский ответ.")
+    row["review"]["method"] = "untracked-model-judge"
+    with pytest.raises(ValueError, match=r"unsupported review\.method"):
         validate_rows([row])
 
 
