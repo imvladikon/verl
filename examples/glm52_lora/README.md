@@ -62,6 +62,31 @@ same ten donor layers and the same 16 experts in every retained MoE layer.
      runs/glm52-lora-surgery-grpo-megatron-sglang/global_step_2/actor
    ```
 
+## TP2 save/resume gate
+
+Use two independently audited free 80-GiB GPUs to exercise tensor and sequence
+parallelism plus the distributed optimizer. The gate trains steps 1-2, saves
+adapter/optimizer/RNG/dataloader state, starts a fresh TP2 process, resumes
+exactly at step 2, trains step 3, exports the adapter, and reloads it through
+Transformers on one GPU:
+
+```bash
+TP_GATE_ACK=GLM52_TP2_MLA_R16 GPU_IDS=5,7 \
+MODEL_PATH=/path/to/immutable/GLM-5.2-9B-LoRA-Surgery-Dummy \
+TRAIN_FILE=/path/to/locked/sft_train.parquet \
+examples/glm52_lora/run_surgery_sft_tp2_gate.sh
+```
+
+`verify_tp2_sft_config.py` rejects topology or resume-path drift before each
+training phase. `verify_tp2_resume_run.py` rejects missing rank-local loads,
+wrong step numbers, restarted dataloaders, and non-finite losses or gradients.
+The qualified run observed token counts `95, 91, 149`, finite losses
+`14.76285, 13.00762, 12.62799`, finite gradient norms
+`243.89970, 19.79066, 9.55080`, and peak sampled memory of 17,786/17,014 MiB on
+the two GPUs. The final 13,608,960-parameter adapter produced a finite nonzero
+logit delta after a fresh reload. Its complete evidence-manifest root is
+`80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958`.
+
 The first profile adapts only the five MLA projections. `lm_head`, the DSA
 indexer, shared experts, and routed experts are separate ablations after the
 MLA-only save/reload, sharding, hot-sync, and finite-gradient gates pass.
