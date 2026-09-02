@@ -168,6 +168,25 @@ rank-16 MLA plus `lm_head` with identical data, seed, tokens and updates. Do
 not begin with routed-expert LoRA. The surgery checkpoint cannot decide this
 quality comparison; it only qualified the engineering path.
 
+The `lm_head` engineering ablation is reproducible with:
+
+```bash
+GPU_ID=5 \
+TRAIN_FILE=/path/to/sft_train.parquet \
+examples/glm52_lora/run_surgery_sft_mla_lm_head_megatron.sh
+
+python examples/glm52_lora/verify_surgery_adapter.py \
+  runs/glm52-lora-surgery-sft-mla-lm-head/global_step_2 \
+  --include-lm-head
+```
+
+On the 9B surgery model it exported and reloaded 102 finite BF16 tensors and
+16,185,344 trainable parameters. Peak CUDA allocated/reserved was
+17.753/18.053 GiB, versus 17.726/17.973 GiB for MLA-only. The first-batch loss
+was identical; the second was 12.992048 versus 12.982867 for MLA-only. This
+proves the head's training/export/reload path but gives no quality reason to
+prefer it; that choice remains a controlled full-model held-out ablation.
+
 ## Full-model SFT qualification profile
 
 `run_full_sft_megatron.sh` is the fail-closed 753B qualification profile. It

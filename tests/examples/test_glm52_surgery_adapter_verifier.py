@@ -8,7 +8,7 @@ from safetensors.torch import save_file
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "examples" / "glm52_lora"))
 
-from verify_surgery_adapter import TARGET_SHAPES, verify  # noqa: E402
+from verify_surgery_adapter import LM_HEAD_SHAPES, TARGET_SHAPES, verify  # noqa: E402
 
 
 def _shape(template: tuple[int | str, ...], rank: int) -> tuple[int, ...]:
@@ -78,6 +78,49 @@ def test_verifier_rejects_an_unchanged_lora_b_tensor(tmp_path: Path) -> None:
         assert "LoRA-B tensors changed" in str(error)
     else:  # pragma: no cover
         raise AssertionError("zero LoRA-B tensor was not rejected")
+
+
+def test_verifier_accepts_mla_plus_lm_head_adapter(tmp_path: Path) -> None:
+    rank = 2
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    tensors = {}
+    for target, (a_shape, b_shape) in TARGET_SHAPES.items():
+        prefix = f"base_model.model.model.layers.0.self_attn.{target}"
+        tensors[f"{prefix}.lora_A.default.weight"] = torch.ones(
+            _shape(a_shape, rank), dtype=torch.bfloat16
+        )
+        tensors[f"{prefix}.lora_B.default.weight"] = torch.ones(
+            _shape(b_shape, rank), dtype=torch.bfloat16
+        )
+    tensors["base_model.model.lm_head.lora_A.weight"] = torch.ones(
+        _shape(LM_HEAD_SHAPES[0], rank), dtype=torch.bfloat16
+    )
+    tensors["base_model.model.lm_head.lora_B.weight"] = torch.ones(
+        _shape(LM_HEAD_SHAPES[1], rank), dtype=torch.bfloat16
+    )
+    save_file(tensors, adapter_dir / "adapter_model.safetensors")
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "r": rank,
+                "lora_alpha": 4,
+                "target_modules": sorted([*TARGET_SHAPES, "lm_head"]),
+            }
+        )
+    )
+
+    result = verify(
+        adapter_dir,
+        layers=1,
+        rank=rank,
+        alpha=4,
+        include_lm_head=True,
+    )
+    assert result["tensor_count"] == 12
+    assert result["parameter_count"] == 492_160
+    assert result["includes_lm_head"] is True
+    assert result["all_lora_b_nonzero"] is True
 
 
 def test_verifier_accepts_ppo_actor_checkpoint_layout(tmp_path: Path) -> None:

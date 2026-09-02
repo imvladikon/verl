@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the exported GLM-5.2 surgery-dummy MLA LoRA adapter."""
+"""Verify the exported GLM-5.2 surgery-dummy MLA LoRA adapter and optional head."""
 
 from __future__ import annotations
 
@@ -19,10 +19,14 @@ TARGET_SHAPES = {
     "kv_b_proj": (("rank", 512), (28672, "rank")),
     "o_proj": (("rank", 16384), (6144, "rank")),
 }
+LM_HEAD_SHAPES = (("rank", 6144), (154880, "rank"))
 ADAPTER_KEY_RE = re.compile(
     r"(?:^|\.)model\.layers\.(?P<layer>\d+)\.self_attn\."
     r"(?P<target>q_a_proj|q_b_proj|kv_a_proj_with_mqa|kv_b_proj|o_proj)\."
     r"lora_(?P<side>[AB])(?:\.default)?\.weight$"
+)
+LM_HEAD_KEY_RE = re.compile(
+    r"(?:^|\.)lm_head\.lora_(?P<side>[AB])(?:\.default)?\.weight$"
 )
 
 
@@ -60,7 +64,14 @@ def resolve_paths(path: Path) -> tuple[Path, Path | None, str]:
     return adapter, path, checkpoint_kind
 
 
-def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
+def verify(
+    path: Path,
+    *,
+    layers: int,
+    rank: int,
+    alpha: int,
+    include_lm_head: bool = False,
+) -> dict:
     adapter_dir, checkpoint_root, checkpoint_kind = resolve_paths(path)
     config = json.loads((adapter_dir / "adapter_config.json").read_text())
     if int(config.get("r", -1)) != rank:
@@ -69,8 +80,11 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
         raise AssertionError(
             f"adapter alpha mismatch: {config.get('lora_alpha')} != {alpha}"
         )
+    expected_targets = set(TARGET_SHAPES)
+    if include_lm_head:
+        expected_targets.add("lm_head")
     targets = set(config.get("target_modules") or ())
-    if targets != set(TARGET_SHAPES):
+    if targets != expected_targets:
         raise AssertionError(f"unexpected target modules: {sorted(targets)}")
 
     weights_path = adapter_dir / "adapter_model.safetensors"
@@ -81,13 +95,18 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
         keys = list(handle.keys())
         for key in keys:
             match = ADAPTER_KEY_RE.search(key)
-            if match is None:
-                raise AssertionError(f"non-MLA adapter tensor: {key}")
-            identity = (
-                int(match.group("layer")),
-                match.group("target"),
-                match.group("side"),
-            )
+            head_match = LM_HEAD_KEY_RE.search(key)
+            if match is None and (not include_lm_head or head_match is None):
+                raise AssertionError(f"unexpected adapter tensor: {key}")
+            if match is not None:
+                identity = (
+                    int(match.group("layer")),
+                    match.group("target"),
+                    match.group("side"),
+                )
+            else:
+                assert head_match is not None
+                identity = (-1, "lm_head", head_match.group("side"))
             if identity in observed:
                 raise AssertionError(f"duplicate adapter tensor: {identity}")
             tensor = handle.get_tensor(key)
@@ -105,6 +124,9 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
         for target, (a_shape, b_shape) in TARGET_SHAPES.items():
             expected[(layer, target, "A")] = _shape(a_shape, rank)
             expected[(layer, target, "B")] = _shape(b_shape, rank)
+    if include_lm_head:
+        expected[(-1, "lm_head", "A")] = _shape(LM_HEAD_SHAPES[0], rank)
+        expected[(-1, "lm_head", "B")] = _shape(LM_HEAD_SHAPES[1], rank)
     if observed != expected:
         missing = sorted(set(expected) - set(observed))
         extra = sorted(set(observed) - set(expected))
@@ -117,7 +139,7 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
             f"adapter topology mismatch: missing={missing[:8]}, extra={extra[:8]}, "
             f"wrong_shapes={wrong[:8]}"
         )
-    expected_b_tensors = layers * len(TARGET_SHAPES)
+    expected_b_tensors = layers * len(TARGET_SHAPES) + int(include_lm_head)
     if nonzero_b != expected_b_tensors:
         raise AssertionError(
             f"only {nonzero_b}/{expected_b_tensors} LoRA-B tensors changed from zero"
@@ -140,6 +162,7 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
         "checkpoint_kind": checkpoint_kind,
         "layers": layers,
         "targets_per_layer": len(TARGET_SHAPES),
+        "includes_lm_head": include_lm_head,
         "tensor_count": len(observed),
         "parameter_count": total_elements,
         "serialized_sha256": sha256(weights_path),
@@ -153,10 +176,17 @@ def main() -> None:
     parser.add_argument("--layers", type=int, default=10)
     parser.add_argument("--rank", type=int, default=16)
     parser.add_argument("--alpha", type=int, default=32)
+    parser.add_argument("--include-lm-head", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
-            verify(args.checkpoint, layers=args.layers, rank=args.rank, alpha=args.alpha),
+            verify(
+                args.checkpoint,
+                layers=args.layers,
+                rank=args.rank,
+                alpha=args.alpha,
+                include_lm_head=args.include_lm_head,
+            ),
             indent=2,
             sort_keys=True,
         )
