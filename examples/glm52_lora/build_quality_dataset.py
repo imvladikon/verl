@@ -26,7 +26,7 @@ def _normalized_prompt(prompt: str) -> str:
     return WHITESPACE_RE.sub(" ", prompt).strip().casefold()
 
 
-def _prompt_digest(prompt: str) -> str:
+def prompt_digest(prompt: str) -> str:
     return hashlib.sha256(_normalized_prompt(prompt).encode("utf-8")).hexdigest()
 
 
@@ -67,7 +67,7 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             raise ValueError(f"{example_id}: prompt and response must be nonempty")
         ids.add(example_id)
 
-        digest = _prompt_digest(prompt)
+        digest = prompt_digest(prompt)
         previous = prompt_splits.get(digest)
         if previous is not None:
             raise ValueError(f"prompt leakage/duplicate: {example_id} ({split}) matches {previous[0]} ({previous[1]})")
@@ -94,6 +94,31 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         use_for_rl = raw.get("use_for_constraint_rl_smoke", False)
         if not isinstance(use_for_rl, bool):
             raise TypeError(f"{example_id}: use_for_constraint_rl_smoke must be a boolean")
+        review = raw.get("review")
+        if not isinstance(review, dict):
+            raise TypeError(f"{example_id}: review must be an object")
+        if review.get("status") != "accepted":
+            raise ValueError(f"{example_id}: review status must be accepted")
+        reviewer = review.get("reviewer")
+        if not isinstance(reviewer, str) or not reviewer.strip():
+            raise TypeError(f"{example_id}: accepted review must name a reviewer")
+        review_notes = review.get("notes", "")
+        if not isinstance(review_notes, str):
+            raise TypeError(f"{example_id}: review.notes must be a string")
+        provenance = raw.get("provenance")
+        if not isinstance(provenance, dict):
+            raise TypeError(f"{example_id}: provenance must be an object")
+        required_provenance = (
+            "dataset",
+            "revision",
+            "license",
+            "source_split",
+            "source_record_id",
+        )
+        for field in required_provenance:
+            value = provenance.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise TypeError(f"{example_id}: provenance.{field} must be a nonempty string")
 
         validated.append(
             {
@@ -111,6 +136,12 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 },
                 "tags": sorted(set(tags)),
                 "use_for_constraint_rl_smoke": use_for_rl,
+                "review": {
+                    "status": "accepted",
+                    "reviewer": reviewer.strip(),
+                    "notes": review_notes,
+                },
+                "provenance": {field: provenance[field].strip() for field in required_provenance},
                 "prompt_sha256": digest,
             }
         )
@@ -127,6 +158,8 @@ def _sft_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ],
             "enable_thinking": False,
             "example_id": row["id"],
+            "tags": row["tags"],
+            "provenance": row["provenance"],
         }
         for row in rows
     ]
@@ -181,6 +214,7 @@ def write_artifacts(rows: list[dict[str, Any]], output_dir: Path) -> dict[str, A
         "eval_count": len(eval_rows),
         "example_ids": [row["id"] for row in rows],
         "prompt_sha256": {row["id"]: row["prompt_sha256"] for row in rows},
+        "source_counts": dict(sorted(Counter(row["provenance"]["dataset"] for row in rows).items())),
         "warning": ("rl_constraint_smoke.parquet has no semantic-quality reward and is not a production RL dataset"),
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")

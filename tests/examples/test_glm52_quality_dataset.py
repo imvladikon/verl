@@ -32,6 +32,14 @@ def _row(
         "response": response,
         "contract": {"requested_language": "ru", "allow_han": False},
         "use_for_constraint_rl_smoke": use_for_rl,
+        "review": {"status": "accepted", "reviewer": "unit-test", "notes": ""},
+        "provenance": {
+            "dataset": "project-authored/unit-test",
+            "revision": "1",
+            "license": "apache-2.0",
+            "source_split": split,
+            "source_record_id": example_id,
+        },
     }
 
 
@@ -45,6 +53,7 @@ def test_example_dataset_builds_disjoint_sft_eval_and_constraint_smoke(
     assert manifest["counts"] == {"test": 2, "train": 4, "validation": 1}
     assert manifest["rl_constraint_smoke_count"] == 3
     assert manifest["eval_count"] == 3
+    assert manifest["source_counts"] == {"project-authored/glm52-quality-fixture": 7}
     assert pq.read_table(tmp_path / "sft_train.parquet").num_rows == 4
     assert pq.read_table(tmp_path / "sft_validation.parquet").num_rows == 1
     assert pq.read_table(tmp_path / "sft_test.parquet").num_rows == 2
@@ -110,4 +119,23 @@ def test_ambiguous_schema_values_are_rejected(field: str, value: object, error: 
     row = _row("schema", "train", "Ответь", "Корректный ответ.")
     row[field] = value
     with pytest.raises(TypeError, match=error):
+        validate_rows([row])
+
+
+def test_pending_review_cannot_be_converted_to_training_data() -> None:
+    row = _row("pending", "train", "Ответь", "Это проверяемый русский ответ.")
+    row["review"] = {"status": "pending", "reviewer": None, "notes": ""}
+    with pytest.raises(ValueError, match="review status must be accepted"):
+        validate_rows([row])
+
+
+def test_provenance_is_required_and_preserved_in_sft_artifact(tmp_path: Path) -> None:
+    row = _row("source", "train", "Ответь", "Это проверяемый русский ответ.")
+    validated = validate_rows([row])
+    write_artifacts(validated, tmp_path)
+    sft_row = pq.read_table(tmp_path / "sft_train.parquet").to_pylist()[0]
+    assert sft_row["provenance"] == row["provenance"]
+
+    del row["provenance"]["revision"]
+    with pytest.raises(TypeError, match=r"provenance\.revision"):
         validate_rows([row])

@@ -85,11 +85,24 @@ python examples/glm52_lora/build_quality_dataset.py \
   curated_quality.jsonl runs/glm52-quality-data
 ```
 
-The builder rejects duplicate/leaking prompts across splits, accidental Han in
-Russian targets, structurally broken Markdown, and Russian targets without
-Cyrillic. It writes SFT parquet files, held-out contracts, and a separately
-named `rl_constraint_smoke.parquet`. The latter is deliberately not a
-production RL dataset because it has no semantic-quality reward.
+Build the pinned public-source review queue separately:
+
+```bash
+python examples/glm52_lora/build_quality_review_queue.py \
+  runs/glm52-quality-review
+```
+
+Its rows are deliberately marked `pending`, and the training builder rejects
+them until a named reviewer changes the status to `accepted`. Source locks,
+selection policy and explicit exclusions are documented in
+[`QUALITY_SOURCES.md`](QUALITY_SOURCES.md).
+
+The builder rejects unreviewed rows, missing provenance, duplicate/leaking
+prompts across splits, accidental Han in Russian targets, structurally broken
+Markdown, and Russian targets without Cyrillic. It writes SFT parquet files,
+held-out contracts, and a separately named `rl_constraint_smoke.parquet`. The
+latter is deliberately not a production RL dataset because it has no
+semantic-quality reward.
 
 Evaluate generated base and adapter outputs independently, then compare the
 same held-out IDs:
