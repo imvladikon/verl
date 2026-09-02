@@ -46,6 +46,10 @@ data:
   # Set to True to ignore input_ids mismatch and use the concatenated input_ids as the final input_ids.
   ignore_input_ids_mismatch: False
 
+  # Tokenize the canonical full chat and derive assistant spans by exact prefix differencing.
+  # Use this for contextual templates such as GLM-5.2 that cannot be composed turn by turn.
+  tokenize_full_conversation: False
+
 # Checkpoint configuration
 checkpoint:
   _target_: verl.trainer.config.CheckpointConfig
@@ -55,6 +59,9 @@ checkpoint:
 
   # For more flexibility, you can specify the contents to load from the checkpoint.
   load_contents: ${checkpoint.save_contents}
+
+  # Save only adapter tensors in the sharded model checkpoint when LoRA is active.
+  save_lora_only: False
 
 trainer:
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}

@@ -114,7 +114,14 @@ class MultiTurnSFTDataset(Dataset):
         self.seed = config.get("seed")
         self.max_samples = max_samples
         self.ignore_input_ids_mismatch = config.get("ignore_input_ids_mismatch", False)
+        self.tokenize_full_conversation = config.get("tokenize_full_conversation", False)
         assert self.truncation in ["error", "left", "right"]
+
+        if self.tokenize_full_conversation and processor is not None:
+            raise ValueError(
+                "tokenize_full_conversation currently supports text-only tokenizers; "
+                "multimodal processors require aligned media tensors"
+            )
 
         if not isinstance(parquet_files, list | ListConfig):
             parquet_files = [parquet_files]
@@ -240,6 +247,67 @@ class MultiTurnSFTDataset(Dataset):
 
         return input_ids, loss_mask, attention_mask, inputs
 
+    def _process_full_conversation(
+        self,
+        messages: list[dict[str, Any]],
+        tools: Optional[list[dict[str, Any]]] = None,
+        enable_thinking: Optional[bool] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Tokenize one canonical chat and derive exact assistant spans.
+
+        Per-message tokenization assumes that a chat template has fixed system
+        and assistant prefixes.  Templates such as GLM-5.2 are contextual, so
+        stripping fixed prefix lengths can delete role tokens and user or
+        assistant content.  Prefix-differencing keeps the canonical full-chat
+        tokenization and supervises only tokens added after each generation
+        prompt.
+        """
+        apply_chat_template_kwargs = {**self.apply_chat_template_kwargs}
+        if enable_thinking is not None:
+            apply_chat_template_kwargs["enable_thinking"] = enable_thinking
+
+        def render(prefix: list[dict[str, Any]], *, add_generation_prompt: bool) -> torch.Tensor:
+            rendered = apply_chat_template(
+                self.tokenizer,
+                messages=prefix,
+                tools=tools,
+                add_generation_prompt=add_generation_prompt,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                **apply_chat_template_kwargs,
+            )
+            return dict(rendered)["input_ids"][0]
+
+        input_ids = render(messages, add_generation_prompt=False)
+        attention_mask = torch.ones_like(input_ids)
+        loss_mask = torch.zeros_like(input_ids)
+
+        for index, message in enumerate(messages):
+            if message["role"] != "assistant":
+                continue
+            generation_prefix = render(messages[:index], add_generation_prompt=True)
+            completed_prefix = render(messages[: index + 1], add_generation_prompt=False)
+            generation_length = len(generation_prefix)
+            completed_length = len(completed_prefix)
+            if completed_length <= generation_length:
+                raise ValueError(f"assistant message {index} added no supervised tokens")
+            if not torch.equal(completed_prefix[:generation_length], generation_prefix):
+                raise ValueError(
+                    f"generation prompt is not a prefix of assistant message {index}; "
+                    "the chat template cannot use exact prefix differencing"
+                )
+            if not torch.equal(input_ids[:completed_length], completed_prefix):
+                raise ValueError(
+                    f"assistant message {index} is not a prefix of the full conversation; "
+                    "the chat template rewrites earlier turns"
+                )
+            loss_mask[generation_length:completed_length] = 1
+
+        if not bool(loss_mask.any()):
+            raise ValueError("conversation has no supervised assistant tokens")
+        return input_ids, loss_mask, attention_mask
+
     def _build_messages(self, example: dict):
         """Replace <image> and <video> placeholder in messages with corresponding image and video
         which is required by processor.apply_chat_template.
@@ -298,31 +366,41 @@ class MultiTurnSFTDataset(Dataset):
         if enable_thinking is not None:
             enable_thinking = bool(enable_thinking)
 
-        # 1. tokenize each message
-        input_ids, loss_mask, attention_mask, multi_modal_inputs = [], [], [], {}
-        for i, message in enumerate(messages):
-            _input_ids, _loss_mask, _attention_mask, _inputs = self._process_single_message(
-                index=i,
-                message=message,
-                full_message=messages,
-                tools=tools if i == 0 else None,
+        # 1. tokenize each message, or one canonical full conversation for
+        # contextual templates whose per-message prefixes are not composable.
+        multi_modal_inputs = {}
+        if self.tokenize_full_conversation:
+            input_ids, loss_mask, attention_mask = self._process_full_conversation(
+                messages=messages,
+                tools=tools,
                 enable_thinking=enable_thinking,
             )
-            input_ids.append(_input_ids)
-            loss_mask.append(_loss_mask)
-            attention_mask.append(_attention_mask)
-            for k, v in _inputs.items():
-                multi_modal_inputs.setdefault(k, []).append(v)
+        else:
+            input_ids_list, loss_mask_list, attention_mask_list = [], [], []
+            for i, message in enumerate(messages):
+                _input_ids, _loss_mask, _attention_mask, _inputs = self._process_single_message(
+                    index=i,
+                    message=message,
+                    full_message=messages,
+                    tools=tools if i == 0 else None,
+                    enable_thinking=enable_thinking,
+                )
+                input_ids_list.append(_input_ids)
+                loss_mask_list.append(_loss_mask)
+                attention_mask_list.append(_attention_mask)
+                for k, v in _inputs.items():
+                    multi_modal_inputs.setdefault(k, []).append(v)
 
-        input_ids = torch.cat(input_ids, dim=0)
-        loss_mask = torch.cat(loss_mask, dim=0)
-        attention_mask = torch.cat(attention_mask, dim=0)
+            input_ids = torch.cat(input_ids_list, dim=0)
+            loss_mask = torch.cat(loss_mask_list, dim=0)
+            attention_mask = torch.cat(attention_mask_list, dim=0)
         assert input_ids.shape == loss_mask.shape == attention_mask.shape, (
             f"Shape mismatch: {input_ids.shape}, {loss_mask.shape}, {attention_mask.shape}"
         )
 
         print_assembled_message(self.tokenizer, messages, input_ids, loss_mask, attention_mask, tools)
-        self.sanity_check(input_ids, messages, tools, enable_thinking)
+        if not self.tokenize_full_conversation:
+            self.sanity_check(input_ids, messages, tools, enable_thinking)
 
         # Since the tokenizer may return user-customized results, we need to filter out inconsistent tensor shapes
         keys_to_remove = []

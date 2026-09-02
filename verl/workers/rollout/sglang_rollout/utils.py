@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import pickle
+from enum import Enum
 from typing import Any, Iterator, Optional
 
 import numpy as np
@@ -84,12 +85,27 @@ def _fusion_key(name: str, groups: tuple[tuple[str, ...], ...]):
     return name[: -len(suffix)], index, size
 
 
+def _json_normalize(value: Any) -> Any:
+    """Convert PEFT's in-memory config containers to deterministic JSON values."""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {key: _json_normalize(item) for key, item in value.items()}
+    if isinstance(value, set):
+        return sorted((_json_normalize(item) for item in value), key=repr)
+    if isinstance(value, (list, tuple)):
+        return [_json_normalize(item) for item in value]
+    return value
+
+
 def normalize_peft_config_for_sglang(peft_config: dict) -> dict:
-    """Normalize an engine's adapter config (enums to strings) for SGLang's adapter loader."""
-    normalized = dict(peft_config)
-    for key in ("task_type", "peft_type"):
-        if key in normalized:
-            normalized[key] = getattr(normalized[key], "value", normalized[key])
+    """Normalize an engine's adapter config to SGLang's JSON wire format.
+
+    PEFT uses sets not only for ``target_modules`` but also for empty
+    ``target_parameters`` after adapter injection. Normalizing only the former
+    lets the first native SGLang adapter sync fail inside ``json.dumps``.
+    """
+    normalized = _json_normalize(peft_config)
     if "peft_type" not in normalized:
         raise ValueError(
             "adapter config has no 'peft_type', which SGLang's adapter loader requires. See "

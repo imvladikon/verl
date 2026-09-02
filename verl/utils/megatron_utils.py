@@ -507,11 +507,27 @@ def make_megatron_module(
 
 
 try:
-    from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel as _MegatronFSDP
+    from megatron.core.distributed.fsdp import mcore_fsdp_adapter as _mcore_fsdp_adapter
     from megatron.core.distributed.fsdp.src.megatron_fsdp.megatron_fsdp import MegatronFSDP
 
-    ALL_MODULE_WRAPPER_CLASSNAMES = (DDP, Float16Module, _MegatronFSDP, MegatronFSDP)
+    # Megatron-LM changed FullyShardedDataParallel from a wrapper class into a
+    # V1/V2 factory function.  A function inside the second argument to
+    # isinstance raises TypeError even when the model is not FSDP-wrapped.
+    # Keep compatibility with both APIs and include the concrete classes
+    # returned by the new factory.
+    _fsdp_wrapper_candidates = (
+        getattr(_mcore_fsdp_adapter, "FullyShardedDataParallel", None),
+        getattr(_mcore_fsdp_adapter, "FullyShardedDataParallelV1", None),
+        getattr(_mcore_fsdp_adapter, "FullyShardedDataParallelV2", None),
+        MegatronFSDP,
+    )
+    DISTRIBUTED_MODULE_WRAPPER_CLASSES = (
+        DDP,
+        *(candidate for candidate in _fsdp_wrapper_candidates if isinstance(candidate, type)),
+    )
+    ALL_MODULE_WRAPPER_CLASSNAMES = (Float16Module, *DISTRIBUTED_MODULE_WRAPPER_CLASSES)
 except ImportError:
+    DISTRIBUTED_MODULE_WRAPPER_CLASSES = (DDP,)
     ALL_MODULE_WRAPPER_CLASSNAMES = (DDP, Float16Module)
 
 
@@ -1680,11 +1696,6 @@ def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
     from megatron.core.distributed import finalize_model_grads
     from megatron.core.utils import get_model_config
 
-    try:
-        from megatron.core.distributed.fsdp.mcore_fsdp_adapter import FullyShardedDataParallel as megatron_FSDP
-    except ImportError:
-        megatron_FSDP = DDP
-
     # register some callbacks for megatron training, following https://github.com/NVIDIA/Megatron-LM/blob/core_v0.15.0rc7/megatron/training/training.py#L2039-L2057
     for one_model in model:
         config = get_model_config(one_model)
@@ -1696,7 +1707,7 @@ def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
         align_grad_reduce = True  # default to True, seldom to be false
         align_param_gather = getattr(one_model.ddp_config, "align_param_gather", False)
 
-        if isinstance(model[0], megatron_FSDP | DDP) and overlap_grad_reduce:
+        if isinstance(model[0], DISTRIBUTED_MODULE_WRAPPER_CLASSES) and overlap_grad_reduce:
             assert config.no_sync_func is None, (
                 "When overlap_grad_reduce is True, config.no_sync_func must be None; "
                 "a custom no_sync_func is not supported when overlapping grad-reduce"

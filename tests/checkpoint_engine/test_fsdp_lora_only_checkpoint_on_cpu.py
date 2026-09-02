@@ -185,6 +185,31 @@ class TestFSDPCheckpointManagerLoraOnly:
         assert "base.weight" in state_dict
         assert "lora_A.weight" in state_dict
 
+    def test_hf_model_with_lora_uses_peft_adapter_export(self, tmp_path, monkeypatch):
+        import verl.utils.checkpoint.fsdp_checkpoint_manager as checkpoint_module
+
+        model = _FakeFSDPModel(has_lora=True)
+        monkeypatch.setattr(
+            checkpoint_module,
+            "get_fsdp_full_state_dict",
+            lambda *_args, **_kwargs: model.state_dict(),
+        )
+        mgr = self._make_fsdp_manager(
+            checkpoint_config={"save_contents": ["hf_model"]},
+            model=model,
+        )
+
+        save_dir = tmp_path / "peft_export"
+        mgr.save_checkpoint(local_path=str(save_dir), global_step=1)
+
+        export = model._fsdp_wrapped_module.saved_pretrained
+        assert export is not None
+        assert export["path"] == str(save_dir / "huggingface")
+        assert export["safe_serialization"] is True
+        assert export["save_embedding_layers"] is False
+        assert "base.weight" in export["state_dict"]
+        assert "base_model.model.lora_A.lora_A.weight" in export["state_dict"]
+
     def test_load_lora_only_checkpoint_merges(self, tmp_path):
         model_before = _FakeFSDPModel(has_lora=True)
         model_before._fsdp_wrapped_module.base_weight.data.fill_(1.0)
@@ -256,6 +281,14 @@ class _FakeFSDPModel:
     def named_buffers(self):
         return {}.items()
 
+    def save_pretrained(self, path, state_dict, safe_serialization, save_embedding_layers):
+        return self._fsdp_wrapped_module.save_pretrained(
+            path,
+            state_dict,
+            safe_serialization,
+            save_embedding_layers,
+        )
+
 
 class _FakePEFTModel:
     """Fake PEFT-style model with a peft_config."""
@@ -268,6 +301,7 @@ class _FakePEFTModel:
         self.lora_B_weight = torch.nn.Parameter(torch.tensor(0.3))
         self.config = _FakeConfig()
         self.can_generate = lambda: False
+        self.saved_pretrained = None
 
         if has_lora:
             self.peft_config = {"default": type("Cfg", (), {"r": 8, "lora_alpha": 16, "task_type": "CAUSAL_LM"})()}
@@ -295,3 +329,11 @@ class _FakePEFTModel:
             else:
                 unexpected_keys.append(key)
         return _LoadStateDictResult(missing_keys=[], unexpected_keys=unexpected_keys)
+
+    def save_pretrained(self, path, state_dict, safe_serialization, save_embedding_layers):
+        self.saved_pretrained = {
+            "path": path,
+            "state_dict": state_dict,
+            "safe_serialization": safe_serialization,
+            "save_embedding_layers": save_embedding_layers,
+        }

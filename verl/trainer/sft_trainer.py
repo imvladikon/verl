@@ -98,13 +98,21 @@ class SFTTrainer:
         )
 
     def _get_lora_train_meta(self):
-        lora_adapter_path = self.config.model.get("lora_adapter_path", None)
-        lora_rank = int(getattr(self.config.model, "lora_rank", 0) or 0)
+        bridge_lora = self.config.model.get("lora", {}) or {}
+        lora_adapter_path = bridge_lora.get("adapter_path", None)
+        if lora_adapter_path is None:
+            lora_adapter_path = self.config.model.get("lora_adapter_path", None)
+
+        lora_rank = int(bridge_lora.get("rank", 0) or 0)
+        if lora_rank <= 0:
+            lora_rank = int(getattr(self.config.model, "lora_rank", 0) or 0)
 
         if lora_adapter_path is None and lora_rank <= 0:
             return None
 
-        raw_lora_alpha = self.config.model.get("lora_alpha", None)
+        raw_lora_alpha = bridge_lora.get("alpha", None)
+        if raw_lora_alpha is None:
+            raw_lora_alpha = self.config.model.get("lora_alpha", None)
         if raw_lora_alpha is None:
             log_with_rank(
                 "LoRA is enabled but `model.lora_alpha` is not set; fallback to 0 in checkpoint metadata.",

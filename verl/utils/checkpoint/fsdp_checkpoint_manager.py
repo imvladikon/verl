@@ -424,6 +424,36 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             # offload to cpu to save LLMs which may be too large to fit in one GPU
             state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=True, rank0_only=True)
 
+            # A PeftModel state dict uses ``base_model.*`` and ``lora_*``
+            # names. Passing that state dict to a freshly constructed base
+            # AutoModel produces an invalid hybrid checkpoint: base config,
+            # PEFT-prefixed weights, and no adapter_config.json. Let PEFT
+            # filter the gathered FSDP state and write the standard
+            # adapter_model.safetensors + adapter_config.json pair instead.
+            # The base checkpoint remains referenced by
+            # ``base_model_name_or_path`` and is never duplicated here.
+            if self._has_lora():
+                if self.rank == 0:
+                    hf_local_path = os.path.join(local_path, "huggingface")
+                    os.makedirs(hf_local_path, exist_ok=True)
+                    unwrap_model.save_pretrained(
+                        hf_local_path,
+                        state_dict=state_dict,
+                        safe_serialization=True,
+                        save_embedding_layers=False,
+                    )
+                    log_with_rank(
+                        f"Saved HF PEFT adapter to {os.path.abspath(hf_local_path)}",
+                        rank=self.rank,
+                        logger=logger,
+                        log_only_rank_0=True,
+                    )
+                    del state_dict
+                torch.distributed.barrier()
+                if self.rank == 0:
+                    self.register_checkpoint(local_path, max_ckpt_to_keep)
+                return
+
             if self.rank == 0:
                 hf_local_path = os.path.join(local_path, "huggingface")
                 os.makedirs(hf_local_path, exist_ok=True)
