@@ -85,6 +85,12 @@ python examples/glm52_lora/verify_bridge_contract.py
 
 ## Quality data and evaluation
 
+The small-checkpoint decision boundary is recorded in
+[`QUALITY_ORACLE.md`](QUALITY_ORACLE.md). Our 9B surgery pair is the primary
+engineering fixture, while only the pinned full `zai-org/GLM-5.2` checkpoint
+can support a Russian/Markdown/accidental-Han quality claim. Public 0.8B test
+and DSpark draft checkpoints are not quality proxies.
+
 The six-row smoke files above prove integration only. They are not a Russian
 quality corpus. Curated full-model data uses the schema demonstrated by
 `quality_dataset.example.jsonl` and is validated before conversion:
