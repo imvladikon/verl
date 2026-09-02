@@ -31,6 +31,8 @@ config_only=${CONFIG_ONLY:-0}
 
 expected_model_revision=cf457fa734ab149ffef225f80893eb38c6ff5cdc
 expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a
+expected_index_sha256=5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e
+expected_bridge_revision=d0c6228a2a832f566dd44a3a179b3136613c11b7
 expected_tp_adapter_gate_sha256=80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958
 expected_ep_routing_gate_sha256=a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13
 expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
@@ -163,6 +165,28 @@ fi
 source "${repo_root}/examples/glm52_lora/stack_env.sh"
 
 mkdir -p "${run_dir}"
+if [[ "${config_only}" != 1 ]]; then
+  require_sha256 \
+    "${model_path}/model.safetensors.index.json" \
+    "${expected_index_sha256}" \
+    "model index"
+  bridge_head=$(git -C "${megatron_bridge_root}" rev-parse HEAD)
+  if [[ "${bridge_head}" != "${expected_bridge_revision}" ]]; then
+    echo "Megatron Bridge revision mismatch: expected=${expected_bridge_revision} actual=${bridge_head}" >&2
+    exit 4
+  fi
+  if [[ -n "$(git -C "${megatron_bridge_root}" status --porcelain)" ]]; then
+    echo "Megatron Bridge checkout must be clean for the full-model import" >&2
+    exit 4
+  fi
+  "${python_bin}" "${repo_root}/examples/glm52_lora/audit_full_checkpoint_loading.py" \
+    "${model_path}" \
+    --world-size "$((nnodes * gpus_per_node))" \
+    --tp 8 --ep 32 --etp 1 --pp 1 --cp 1 \
+    --bridge-revision "${bridge_head}" \
+    --official-glm52 \
+    > "${run_dir}/full-hf-load-audit-node${node_rank}.json"
+fi
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TOKENIZERS_PARALLELISM=false
 export MAX_JOBS=${MAX_JOBS:-4}

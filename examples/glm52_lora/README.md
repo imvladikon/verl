@@ -562,6 +562,22 @@ snapshot sentinel, eight exclusive H200s on every node, an explicit operator
 acknowledgement, and the exact evidence roots from the passed TP2 adapter
 save/reload and EP2 expert-routing save/reload gates.
 
+Before `torchrun`, every node also runs `audit_full_checkpoint_loading.py`.
+It reads only the 7.12 MiB of safetensors JSON headers, never tensor payloads,
+and requires the exact 282-shard index. The pinned checkpoint contains 58,368
+separate routed-expert tensors: each expert projection is 24 MiB rather than a
+single stacked terabyte-scale tensor. The largest source tensor is the 1.773
+GiB embedding or language-model head; a 5.0 GiB shard is not materialized as
+one tensor.
+
+At TP8/EP32/ETP1/PP1, the pinned Bridge importer reads HF tensors before its
+rank-local TP/ETP scatter. The conservative logical traffic is therefore
+`35.186 GiB non-expert × 64 + 1,368 GiB expert × 2 = 4.871 TiB` across the
+job, or 77.936 GiB per rank on average. Shared filesystem page cache may lower
+physical backing-store traffic, but the launch gate does not assume it. Each
+node writes its own `full-hf-load-audit-nodeN.json`; use those files to separate
+slow streaming from a deadlock during the first full qualification.
+
 The production candidate consumes all three locked train buckets in one
 optimizer stream and all three disjoint validation buckets at the final step.
 The three test buckets are hash-locked but never used for training or model
