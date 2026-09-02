@@ -248,6 +248,9 @@ same held-out IDs:
 ```bash
 python examples/glm52_lora/evaluate_quality_outputs.py \
   adapter_predictions.jsonl --details adapter_details.jsonl
+python examples/glm52_lora/compare_quality_outputs.py \
+  base_predictions.jsonl adapter_predictions.jsonl \
+  --details paired_details.jsonl
 ```
 
 Each prediction carries its contract and, when available, exact generated
@@ -255,6 +258,13 @@ token count and a separately produced semantic score. The evaluator reports
 Markdown structural validity, conditional accidental-Han rates, Han per 1,000
 tokens, Russian-script diagnostics, semantic-score coverage, and never
 silently substitutes a character estimate for missing token counts.
+
+The paired comparator additionally requires identical IDs, contracts, prompt
+hashes, decoding-contract hashes, and paired semantic-score coverage. It uses
+a deterministic paired bootstrap and remains `PENDING` unless all three target
+failures are reproduced in the base outputs and improve without semantic
+regression. Surgery-model output may validate this plumbing, but only the full
+checkpoint may produce a quality `PASS`.
 
 `quality_reward.py` is only the deterministic constraint component. It masks
 code, URLs and link destinations, permits Han only under an explicit Chinese,
