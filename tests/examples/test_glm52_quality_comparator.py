@@ -23,6 +23,12 @@ def _row(
         "id": example_id,
         "prompt_sha256": f"prompt-{example_id}",
         "decoding_contract_sha256": "greedy-v1",
+        "generation_pair_contract_sha256": "a" * 64,
+        "generation": {
+            "variant": "base",
+            "runtime_manifest_sha256": "a" * 64,
+            "quality_claim_allowed": True,
+        },
         "completion": completion,
         "completion_token_count": 12,
         "contract": {
@@ -37,6 +43,15 @@ def _row(
     return row
 
 
+def _adapter(row: dict[str, object]) -> dict[str, object]:
+    row["generation"] = {
+        "variant": "adapter",
+        "runtime_manifest_sha256": row["generation_pair_contract_sha256"],
+        "quality_claim_allowed": True,
+    }
+    return row
+
+
 def test_comparator_passes_only_paired_three_target_improvement() -> None:
     base = [
         _row("markdown-a", "сломанный markdown", 0.2, require_markdown=True),
@@ -45,10 +60,10 @@ def test_comparator_passes_only_paired_three_target_improvement() -> None:
         _row("han-b", "Ещё один русский 结果", 0.5),
     ]
     adapter = [
-        _row("markdown-a", "## Ответ\n\n1. Первый пункт.", 0.7, require_markdown=True),
-        _row("markdown-b", "## Итог\n\n1. Второй пункт.", 0.8, require_markdown=True),
-        _row("han-a", "Русский текст.", 0.9),
-        _row("han-b", "Ещё один русский текст.", 1.0),
+        _adapter(_row("markdown-a", "## Ответ\n\n1. Первый пункт.", 0.7, require_markdown=True)),
+        _adapter(_row("markdown-b", "## Итог\n\n1. Второй пункт.", 0.8, require_markdown=True)),
+        _adapter(_row("han-a", "Русский текст.", 0.9)),
+        _adapter(_row("han-b", "Ещё один русский текст.", 1.0)),
     ]
 
     result, details = compare_rows(base, adapter, bootstrap_samples=500)
@@ -68,7 +83,7 @@ def test_comparator_passes_only_paired_three_target_improvement() -> None:
 
 def test_comparator_stays_pending_without_semantics_or_reproduced_defects() -> None:
     base = [_row("clean", "Корректный русский текст.", None)]
-    adapter = [_row("clean", "Другой корректный русский текст.", None)]
+    adapter = [_adapter(_row("clean", "Другой корректный русский текст.", None))]
 
     result, _ = compare_rows(base, adapter, bootstrap_samples=100)
 
@@ -83,7 +98,7 @@ def test_comparator_stays_pending_without_semantics_or_reproduced_defects() -> N
 
 def test_comparator_reports_semantic_regression_as_failure() -> None:
     base = [_row("semantic", "Хороший русский ответ 中", 0.9)]
-    adapter = [_row("semantic", "Плохой русский ответ.", 0.1)]
+    adapter = [_adapter(_row("semantic", "Плохой русский ответ.", 0.1))]
 
     result, _ = compare_rows(base, adapter, bootstrap_samples=100)
 
@@ -102,7 +117,7 @@ def test_comparator_reports_semantic_regression_as_failure() -> None:
 )
 def test_comparator_rejects_unpaired_contracts(field: str, new_value: object, message: str) -> None:
     base = [_row("same", "Ответ 中", 0.4)]
-    adapter_row = _row("same", "Ответ.", 0.6)
+    adapter_row = _adapter(_row("same", "Ответ.", 0.6))
     if field == "request_messages_sha256":
         base[0][field] = "original"
     adapter_row[field] = new_value
@@ -113,16 +128,30 @@ def test_comparator_rejects_unpaired_contracts(field: str, new_value: object, me
 
 def test_comparator_rejects_unpaired_semantic_coverage_and_ids() -> None:
     base = [_row("base", "Ответ 中", 0.4)]
-    adapter = [_row("base", "Ответ.", None)]
+    adapter = [_adapter(_row("base", "Ответ.", None))]
     with pytest.raises(ValueError, match="semantic score coverage"):
         compare_rows(base, adapter, bootstrap_samples=100)
 
     with pytest.raises(ValueError, match="ids differ"):
         compare_rows(
             base,
-            [_row("adapter", "Ответ.", 0.6)],
+            [_adapter(_row("adapter", "Ответ.", 0.6))],
             bootstrap_samples=100,
         )
+
+
+def test_comparator_rejects_surgery_or_unproven_runtime() -> None:
+    base = [_row("test-only", "Русский ответ 中", 0.4)]
+    adapter = [_adapter(_row("test-only", "Русский ответ.", 0.8))]
+    base[0]["generation"]["quality_claim_allowed"] = False
+    adapter[0]["generation"]["quality_claim_allowed"] = False
+
+    with pytest.raises(ValueError, match="not a full-model quality oracle"):
+        compare_rows(base, adapter, bootstrap_samples=100)
+
+    del base[0]["generation_pair_contract_sha256"]
+    with pytest.raises(ValueError, match="generation_pair_contract_sha256"):
+        compare_rows(base, adapter, bootstrap_samples=100)
 
 
 def test_comparator_cli_writes_hashed_details(
@@ -132,7 +161,7 @@ def test_comparator_cli_writes_hashed_details(
     adapter_path = tmp_path / "adapter.jsonl"
     details_path = tmp_path / "details.jsonl"
     base_path.write_text(json.dumps(_row("paired", "Ответ 中", 0.4)) + "\n")
-    adapter_path.write_text(json.dumps(_row("paired", "Ответ.", 0.7)) + "\n")
+    adapter_path.write_text(json.dumps(_adapter(_row("paired", "Ответ.", 0.7))) + "\n")
     monkeypatch.setattr(
         sys,
         "argv",

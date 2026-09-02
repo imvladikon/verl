@@ -31,6 +31,22 @@ The 9B surgery results prove the training path, not language quality.
 The launchers intentionally use different acknowledgement strings and run
 directories, so one profile cannot overwrite or masquerade as the other.
 
+## Exact SGLang generation contract
+
+`build_quality_sglang_runtime.py` hashes the real immutable BF16 trainer
+snapshot, the exact BF16 or official FP8 inference snapshot, the verified
+adapter, a clean SGLang Git revision, and every accepted server argument.
+`launch_quality_sglang_server.py` refuses a different checkout,
+`PYTHONPATH`, physical GPU list, or unrecorded server option.
+`generate_full_quality_outputs_sglang.py` requires complete non-truncated
+responses and stamps every row with the common runtime-manifest hash.
+
+Generate base and adapter validation rows against the same live server
+instance. Both the blinded-review tool and the comparator verify that common
+hash and `quality_claim_allowed=true`. Surgery runs require the explicit
+nonofficial acknowledgement, remain useful for endpoint and LoRA-load tests,
+and are rejected as quality evidence in code.
+
 ## Hosted baseline preflight
 
 `generate_full_quality_baseline_hf.py` can cheaply test the live full-model
@@ -103,7 +119,8 @@ for MLA+`lm_head`. At TP8 their local counts are 29,552,640 and 29,874,688.
 ## Quality decision
 
 Run `build_blind_quality_review.py` first on paired rows from the exact full
-checkpoint. It deterministically hides base/adapter identity with an HMAC key,
+checkpoint and the same hashed SGLang runtime. It deterministically hides
+base/adapter identity with an HMAC key,
 requires complete ratings from at least two distinct reviewers, rejects any
 changed review item, and adds auditable semantic scores to both prediction
 files. Keep the key outside version control; only its SHA-256 commitment is

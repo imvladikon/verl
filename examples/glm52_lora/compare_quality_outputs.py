@@ -68,6 +68,7 @@ def _require_equal_pair_contract(example_id: str, base: dict[str, Any], adapter:
         "prompt_sha256",
         "request_messages_sha256",
         "decoding_contract_sha256",
+        "generation_pair_contract_sha256",
     ):
         base_value = base.get(field)
         adapter_value = adapter.get(field)
@@ -75,6 +76,21 @@ def _require_equal_pair_contract(example_id: str, base: dict[str, Any], adapter:
             continue
         if not base_value or base_value != adapter_value:
             raise ValueError(f"{example_id}: base and adapter {field} differ")
+    runtime_pair_hash = base.get("generation_pair_contract_sha256")
+    if not isinstance(runtime_pair_hash, str) or len(runtime_pair_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in runtime_pair_hash
+    ):
+        raise ValueError(f"{example_id}: generation_pair_contract_sha256 must be a SHA-256 digest")
+    for label, prediction in (("base", base), ("adapter", adapter)):
+        generation = prediction.get("generation")
+        if not isinstance(generation, dict):
+            raise ValueError(f"{example_id}: {label} generation provenance is missing")
+        if generation.get("variant") != label:
+            raise ValueError(f"{example_id}: {label} generation variant is invalid")
+        if generation.get("runtime_manifest_sha256") != runtime_pair_hash:
+            raise ValueError(f"{example_id}: {label} runtime manifest hash differs from the pair contract")
+        if generation.get("quality_claim_allowed") is not True:
+            raise ValueError(f"{example_id}: {label} runtime is not a full-model quality oracle")
     if (base.get("semantic_score") is None) != (adapter.get("semantic_score") is None):
         raise ValueError(f"{example_id}: semantic score coverage is not paired")
 

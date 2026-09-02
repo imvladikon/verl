@@ -45,7 +45,7 @@ def fixture_rows() -> tuple[dict, list[dict], list[dict]]:
         ]
     )
 
-    def prediction(completion: str) -> dict:
+    def prediction(completion: str, variant: str) -> dict:
         return {
             "id": "example",
             "completion": completion,
@@ -53,9 +53,17 @@ def fixture_rows() -> tuple[dict, list[dict], list[dict]]:
             "prompt_sha256": source["prompt_sha256"],
             "request_messages_sha256": request_hash,
             "decoding_contract_sha256": "d" * 64,
+            "generation_pair_contract_sha256": "a" * 64,
+            "generation": {
+                "variant": variant,
+                "runtime_manifest_sha256": "a" * 64,
+                "quality_claim_allowed": True,
+            },
         }
 
-    return {"example": source}, [prediction("Базовый ответ.")], [prediction("Ответ адаптера.")]
+    return {
+        "example": source
+    }, [prediction("Базовый ответ.", "base")], [prediction("Ответ адаптера.", "adapter")]
 
 
 def completed_packet(packet: list[dict], reviewer: str, a: int, b: int) -> list[dict]:
@@ -236,9 +244,30 @@ def test_adjudicated_scores_feed_the_three_target_comparator(tmp_path: Path) -> 
             "prompt_sha256": source["prompt_sha256"],
             "request_messages_sha256": messages_hash,
             "decoding_contract_sha256": "d" * 64,
+            "generation_pair_contract_sha256": "a" * 64,
         }
-        base.append({**common, "completion": base_text})
-        adapter.append({**common, "completion": adapter_text})
+        base.append(
+            {
+                **common,
+                "completion": base_text,
+                "generation": {
+                    "variant": "base",
+                    "runtime_manifest_sha256": "a" * 64,
+                    "quality_claim_allowed": True,
+                },
+            }
+        )
+        adapter.append(
+            {
+                **common,
+                "completion": adapter_text,
+                "generation": {
+                    "variant": "adapter",
+                    "runtime_manifest_sha256": "a" * 64,
+                    "quality_claim_allowed": True,
+                },
+            }
+        )
 
     packet = build_packet(contracts, base, adapter, blinding_key=key)
     first = tmp_path / "first.jsonl"

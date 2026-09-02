@@ -145,6 +145,11 @@ def _validate_pair(
     base: dict[str, Any],
     adapter: dict[str, Any],
 ) -> None:
+    runtime_pair_hash = base.get("generation_pair_contract_sha256")
+    if not is_sha256(runtime_pair_hash):
+        raise ValueError(f"{example_id}: base generation pair contract must be a SHA-256 digest")
+    if runtime_pair_hash != adapter.get("generation_pair_contract_sha256"):
+        raise ValueError(f"{example_id}: base and adapter generation pair contracts differ")
     for label, prediction in (("base", base), ("adapter", adapter)):
         completion = prediction.get("completion")
         if not isinstance(completion, str) or not completion.strip():
@@ -156,6 +161,15 @@ def _validate_pair(
         expected_messages_hash = canonical_sha256(_request_messages(source))
         if prediction.get("request_messages_sha256") != expected_messages_hash:
             raise ValueError(f"{example_id}: {label} request messages differ from held-out source")
+        generation = prediction.get("generation")
+        if not isinstance(generation, dict):
+            raise TypeError(f"{example_id}: {label} generation provenance must be an object")
+        if generation.get("variant") != label:
+            raise ValueError(f"{example_id}: {label} generation variant is invalid")
+        if generation.get("runtime_manifest_sha256") != runtime_pair_hash:
+            raise ValueError(f"{example_id}: {label} runtime manifest hash differs from the pair contract")
+        if generation.get("quality_claim_allowed") is not True:
+            raise ValueError(f"{example_id}: {label} runtime is not a full-model quality oracle")
     decoding_hash = base.get("decoding_contract_sha256")
     if not is_sha256(decoding_hash):
         raise ValueError(f"{example_id}: base decoding contract must be a SHA-256 digest")
@@ -208,6 +222,7 @@ def build_packet(
             "prompt_sha256": source["prompt_sha256"],
             "request_messages_sha256": canonical_sha256(_request_messages(source)),
             "decoding_contract_sha256": base[example_id].get("decoding_contract_sha256"),
+            "generation_pair_contract_sha256": base[example_id]["generation_pair_contract_sha256"],
             "candidate_a": completions[0],
             "candidate_b": completions[1],
             "rubric": {

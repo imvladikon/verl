@@ -320,6 +320,73 @@ held-out contracts, and a separately named `rl_constraint_smoke.parquet`. The
 latter is deliberately not a production RL dataset because it has no
 semantic-quality reward.
 
+Generate the paired outputs through one exact SGLang runtime. First write a
+JSON object containing the actual server arguments. It must include
+`model_path`, `served_base_model`, `endpoint`, `tp_size`, the physical
+`gpu_ids`, `max_model_len`, strict LoRA fields, and the adapter's exact target
+modules. Put any required CUDA library directories in `ld_library_paths`.
+Optional kernel choices such as `attention_backend` and the three DSA backends
+belong in the same object; there is no unrecorded command-line escape hatch.
+Build the manifest from real immutable trainer and inference snapshots,
+the verified adapter, and the clean SGLang checkout that will actually be
+imported:
+
+```bash
+python examples/glm52_lora/build_quality_sglang_runtime.py \
+  --trainer-model-path /snapshots/GLM-5.2/REVISION \
+  --model-path /snapshots/GLM-5.2-FP8/REVISION \
+  --adapter-path /runs/mla-only/adapter \
+  --adapter-verification /runs/mla-only/adapter_verification.json \
+  --adapter-name glm52-quality-mla-r16 --profile mla-only \
+  --sglang-checkout /src/sglang --server-args server-args.json \
+  --server-instance-id glm52-quality-validation-1 \
+  --output runtime-validation.json
+```
+
+The builder verifies both model revisions from their snapshot directory name
+or revision sentinel, hashes both configs and weight indexes, checks the full
+78-layer contract, and binds the adapter serialization to its verification
+record. Launch exactly that manifest; `PYTHONPATH`, `CUDA_VISIBLE_DEVICES`, and
+any `LD_LIBRARY_PATH` entries must match the bound checkout and runtime:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=/src/sglang/python \
+python examples/glm52_lora/launch_quality_sglang_server.py \
+  --runtime-manifest runtime-validation.json
+```
+
+Then generate base and adapter rows with the same endpoint, runtime manifest,
+decoding contract, and server instance:
+
+```bash
+for VARIANT in base adapter; do
+  python examples/glm52_lora/generate_full_quality_outputs_sglang.py \
+    /path/to/seq256/eval_contracts.jsonl \
+    /path/to/seq384/eval_contracts.jsonl \
+    /path/to/seq768/eval_contracts.jsonl \
+    --split validation --variant "$VARIANT" \
+    --runtime-manifest runtime-validation.json \
+    --endpoint http://127.0.0.1:30000/v1/chat/completions \
+    --output "$VARIANT-validation.jsonl" \
+    --manifest "$VARIANT-validation-manifest.json"
+done
+```
+
+For a surgery-checkpoint plumbing test, pass the exact acknowledgement
+`nonofficial-checkpoint-output-is-not-quality-evidence` to the builder,
+launcher, and generator. Those rows are permanently marked
+`quality_claim_allowed=false` and cannot pass the comparator or blinded
+review gate.
+
+The surgery plumbing test was run on one A100 with the BF16 9B fixture,
+adapter SHA-256 `721f134b…c63e7`, and SGLang `9377c437…55c2`. The model loaded
+16.89 GB of weights and the configured server occupied 61,736 MiB including
+its static pools. Strict LoRA loading completed. On an identical deterministic
+request the base and adapter both selected EOS, as expected from the dummy,
+but its first-token log-prob changed from `-0.456743` to `-4.043040`. This
+proves that the adapter affected the SGLang forward path; the production
+generator correctly rejected the empty dummy completion as quality output.
+
 Evaluate generated base and adapter outputs independently, then compare the
 same held-out IDs:
 
@@ -383,11 +450,11 @@ tokens, Russian-script diagnostics, semantic-score coverage, and never
 silently substitutes a character estimate for missing token counts.
 
 The paired comparator additionally requires identical IDs, contracts, prompt
-hashes, decoding-contract hashes, and paired semantic-score coverage. It uses
-a deterministic paired bootstrap and remains `PENDING` unless all three target
-failures are reproduced in the base outputs and improve without semantic
-regression. Surgery-model output may validate this plumbing, but only the full
-checkpoint may produce a quality `PASS`.
+hashes, decoding-contract hashes, the same exact runtime-manifest hash, and
+paired semantic-score coverage. It programmatically rejects unproven or
+surgery-checkpoint output. It uses a deterministic paired bootstrap and
+remains `PENDING` unless all three target failures are reproduced in the base
+outputs and improve without semantic regression.
 
 `quality_reward.py` is only the deterministic constraint component. It masks
 code, URLs and link destinations, permits Han only under an explicit Chinese,
