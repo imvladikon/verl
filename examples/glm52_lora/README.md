@@ -37,6 +37,15 @@ same ten donor layers and the same 16 experts in every retained MoE layer.
      runs/glm52-lora-surgery-sft-megatron/global_step_2
    ```
 
+   Then reload the exported HF adapter with the same resolved CUDA runtime and
+   prove that it produces finite, nonzero logit changes:
+
+   ```bash
+   GPU_ID=5 \
+   ADAPTER_PATH=/path/to/global_step_2/model/huggingface/adapter \
+   examples/glm52_lora/run_verify_adapter_reload.sh
+   ```
+
 4. Pass the Megatron adapter checkpoint to the FP8 rollout run:
 
    ```bash
