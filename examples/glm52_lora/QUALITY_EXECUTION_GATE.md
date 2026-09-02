@@ -102,9 +102,18 @@ for MLA+`lm_head`. At TP8 their local counts are 29,552,640 and 29,874,688.
 
 ## Quality decision
 
-Run `compare_quality_outputs.py` on paired rows with identical IDs, prompt
-hashes, decoding-contract hashes, and full semantic-score coverage. A result
-is accepted only when Russian semantic quality is non-inferior and both the
-required-Markdown validity and accidental-Han gates improve. Missing semantic
-scores, a defect not reproduced in the base, or a confidence interval crossing
-the decision boundary remains `PENDING`, never `PASS`.
+Run `build_blind_quality_review.py` first on paired rows from the exact full
+checkpoint. It deterministically hides base/adapter identity with an HMAC key,
+requires complete ratings from at least two distinct reviewers, rejects any
+changed review item, and adds auditable semantic scores to both prediction
+files. Keep the key outside version control; only its SHA-256 commitment is
+recorded.
+
+Run `compare_quality_outputs.py` on the scored rows with identical IDs, prompt
+hashes, request-message hashes, decoding-contract hashes, and full semantic
+coverage. A result is accepted only when Russian semantic quality is
+non-inferior and both required-Markdown validity and accidental-Han improve.
+Missing semantic scores, a defect not reproduced in the base, or a confidence
+interval crossing the decision boundary remains `PENDING`, never `PASS`.
+Choose the adapter on validation, then generate and review the untouched test
+split once with a separate blinding key.

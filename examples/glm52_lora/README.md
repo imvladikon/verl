@@ -331,6 +331,51 @@ python examples/glm52_lora/compare_quality_outputs.py \
   --details paired_details.jsonl
 ```
 
+Produce semantic scores through a blinded paired review rather than inferring
+them from Cyrillic ratio or the structural checks. Generate a secret key
+outside the repository, prepare an unlabeled A/B packet, and give unchanged
+copies to at least two reviewers:
+
+```bash
+openssl rand -hex 32 > /secure/path/glm52-validation-review.key
+python examples/glm52_lora/build_blind_quality_review.py prepare \
+  /path/to/seq256/eval_contracts.jsonl \
+  /path/to/seq384/eval_contracts.jsonl \
+  /path/to/seq768/eval_contracts.jsonl \
+  --split validation \
+  --base base-validation.jsonl --adapter adapter-validation.jsonl \
+  --blinding-key-file /secure/path/glm52-validation-review.key \
+  --packet validation-review.jsonl --manifest validation-review-manifest.json
+```
+
+Each reviewer fills only `review` in their copy. The tool rejects changed
+prompts, contracts, completions, hashes, incomplete ratings, and duplicate
+reviewer identities. The key is never written to an artifact; the manifest
+stores only its SHA-256 commitment. Adjudicate the completed copies and feed
+the scored rows to the existing comparator:
+
+```bash
+python examples/glm52_lora/build_blind_quality_review.py adjudicate \
+  /path/to/seq256/eval_contracts.jsonl \
+  /path/to/seq384/eval_contracts.jsonl \
+  /path/to/seq768/eval_contracts.jsonl \
+  --split validation \
+  --base base-validation.jsonl --adapter adapter-validation.jsonl \
+  --blinding-key-file /secure/path/glm52-validation-review.key \
+  --review reviewer-1.jsonl --review reviewer-2.jsonl \
+  --base-output base-validation-scored.jsonl \
+  --adapter-output adapter-validation-scored.jsonl \
+  --manifest validation-adjudication.json
+
+python examples/glm52_lora/compare_quality_outputs.py \
+  base-validation-scored.jsonl adapter-validation-scored.jsonl \
+  --details validation-paired-details.jsonl
+```
+
+Use validation to choose MLA-only versus the conditional `lm_head` ablation.
+Generate and review the test outputs once, only after selection, with a new
+key. Do not publish or commit either key.
+
 Each prediction carries its contract and, when available, exact generated
 token count and a separately produced semantic score. The evaluator reports
 Markdown structural validity, conditional accidental-Han rates, Han per 1,000

@@ -50,7 +50,7 @@ full checkpoint and held-out IDs:
    formatting constraints improve.
 
 The official base checkpoint is available through several Hub inference
-providers, so a provider can materialize a pinned pre-training baseline. That
-does not validate an adapter: the adapter result must be served from the exact
-full base revision plus the exact trained adapter, preferably in the same
-runtime used for the baseline.
+providers, but the conversational provider route cannot pin or attest a Hub
+commit. Provider output is therefore only a preflight. The final baseline and
+adapter outputs must come from the exact full base revision, preferably from
+the same runtime, with the adapter artifact hash recorded separately.
