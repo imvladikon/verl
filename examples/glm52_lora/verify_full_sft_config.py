@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the resolved Hydra config for the 64-H200 GLM-5.2 SFT candidate."""
+"""Validate a resolved full GLM-5.2 SFT candidate topology."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 
 import yaml
-
 from estimate_full_sft_memory import EXPECTED_FULL_POLICY_PARAMETERS, estimate
 
 MLA_TARGETS = [
@@ -30,6 +29,9 @@ EXPECTED_TP_GATE_SHA256 = (
 )
 EXPECTED_EP_GATE_SHA256 = (
     "a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13"
+)
+EXPECTED_TP_EP_GATE_SHA256 = (
+    "dbf6d87a6ffdb2065a5a6bb066558d92a07aff8f63e7a0192ff257da2ebca711"
 )
 
 
@@ -115,6 +117,14 @@ def main() -> None:
     parser.add_argument("--expected-steps", type=int)
     parser.add_argument("--expected-train-file-count", type=int, default=1)
     parser.add_argument("--expected-val-file-count", type=int, default=1)
+    parser.add_argument("--expected-nnodes", type=int, default=8)
+    parser.add_argument("--expected-gpus-per-node", type=int, default=8)
+    parser.add_argument("--expected-tp", type=int, default=8)
+    parser.add_argument("--expected-ep", type=int, default=32)
+    parser.add_argument("--expected-etp", type=int, default=1)
+    parser.add_argument("--expected-pp", type=int, default=1)
+    parser.add_argument("--expected-cp", type=int, default=1)
+    parser.add_argument("--expected-global-batch-size", type=int, default=64)
     parser.add_argument(
         "--expected-lora-profile",
         choices=sorted(LORA_PROFILES),
@@ -138,12 +148,15 @@ def main() -> None:
     )
 
     engine = config["engine"]
-    require(engine["tensor_model_parallel_size"] == 8, "TP drift")
-    require(engine["expert_model_parallel_size"] == 32, "EP drift")
-    require(engine["expert_tensor_parallel_size"] == 1, "ETP drift")
-    require(engine["pipeline_model_parallel_size"] == 1, "PP drift")
-    require(engine["context_parallel_size"] == 1, "CP drift")
-    require(engine["sequence_parallel"] is True, "sequence parallel disabled")
+    require(engine["tensor_model_parallel_size"] == args.expected_tp, "TP drift")
+    require(engine["expert_model_parallel_size"] == args.expected_ep, "EP drift")
+    require(engine["expert_tensor_parallel_size"] == args.expected_etp, "ETP drift")
+    require(engine["pipeline_model_parallel_size"] == args.expected_pp, "PP drift")
+    require(engine["context_parallel_size"] == args.expected_cp, "CP drift")
+    require(
+        engine["sequence_parallel"] is (args.expected_tp > 1),
+        "sequence parallel drift",
+    )
     require(
         engine["override_transformer_config"]["dsa_kernel_backend"] == "none",
         "unqualified DSA backend",
@@ -166,7 +179,10 @@ def main() -> None:
     )
 
     data = config["data"]
-    require(data["train_batch_size"] == 64, "global batch drift")
+    require(
+        data["train_batch_size"] == args.expected_global_batch_size,
+        "global batch drift",
+    )
     require(data["micro_batch_size_per_gpu"] == 1, "micro batch drift")
     require(
         data["max_length"] == args.expected_max_length
@@ -190,14 +206,12 @@ def main() -> None:
     )
 
     trainer = config["trainer"]
+    require(trainer["nnodes"] == args.expected_nnodes, "node-count drift")
     require(
-        trainer["nnodes"] == 8 and trainer["n_gpus_per_node"] == 8,
-        "64-GPU topology drift",
+        trainer["n_gpus_per_node"] == args.expected_gpus_per_node,
+        "per-node GPU-count drift",
     )
     topology = compute_parallel_topology(config)
-    require(topology["dense_dp"] == 8, "dense DP drift")
-    require(topology["expert_dp"] == 2, "expert DP drift")
-    require(topology["experts_per_ep_rank"] == 8, "expert ownership drift")
     if args.expected_steps is None:
         require(2 <= trainer["total_training_steps"] <= 8, "step bound drift")
     else:
@@ -244,6 +258,7 @@ def main() -> None:
         "required_prior_gates": {
             "tp2_adapter_resume_evidence_root": EXPECTED_TP_GATE_SHA256,
             "ep2_routing_resume_evidence_root": EXPECTED_EP_GATE_SHA256,
+            "tp2_ep2_combined_resume_evidence_root": EXPECTED_TP_EP_GATE_SHA256,
         },
     }
     print(json.dumps(result, indent=2, sort_keys=True))

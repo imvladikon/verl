@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "examples" / "glm52_lora"))
 
 from verify_full_sft_config import (  # noqa: E402
     EXPECTED_EP_GATE_SHA256,
+    EXPECTED_TP_EP_GATE_SHA256,
     EXPECTED_TP_GATE_SHA256,
     LORA_PROFILES,
     compute_parallel_topology,
@@ -84,12 +85,20 @@ def test_full_launch_requires_exact_validated_gate_roots() -> None:
     ).read_text(encoding="utf-8")
     assert EXPECTED_TP_GATE_SHA256 in launcher
     assert EXPECTED_EP_GATE_SHA256 in launcher
+    assert EXPECTED_TP_EP_GATE_SHA256 in launcher
     assert (
         '"${TP_ADAPTER_GATE_SHA:-}" != "${expected_tp_adapter_gate_sha256}"' in launcher
     )
     assert (
         '"${EP_ROUTING_GATE_SHA:-}" != "${expected_ep_routing_gate_sha256}"' in launcher
     )
+    assert (
+        '"${TP_EP_GATE_SHA:-}" != "${expected_tp_ep_gate_sha256}"' in launcher
+    )
+    assert "--require-candidate" in launcher
+    assert 'planner_profile_args=(--include-output-layer)' in launcher
+    assert "refusing non-H200 device" not in launcher
+    assert '--tp "${tp_size}" --ep "${ep_size}" --etp "${etp_size}"' in launcher
 
 
 def test_full_launch_has_two_locked_lora_profiles() -> None:
@@ -113,10 +122,15 @@ def test_full_launch_has_two_locked_lora_profiles() -> None:
     launcher = (
         ROOT / "examples" / "glm52_lora" / "run_full_sft_megatron.sh"
     ).read_text(encoding="utf-8")
-    assert "GLM52_64H200_MLA_R16" in launcher
-    assert "GLM52_64H200_MLA_LM_HEAD_R16" in launcher
+    assert "GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_R16" in launcher
+    assert (
+        "GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_LM_HEAD_R16"
+        in launcher
+    )
     assert '"engine.seed=${seed}"' in launcher
     assert '"trainer.seed=${seed}"' in launcher
+    assert "qualified full-model family requires 8 GPUs/node, TP8, ETP1, PP1, and CP1" in launcher
+    assert 'requires EP in {8,16,32}' in launcher
 
     head_wrapper = (
         ROOT

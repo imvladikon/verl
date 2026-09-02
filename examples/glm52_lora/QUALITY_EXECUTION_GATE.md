@@ -11,8 +11,8 @@ The 9B surgery results prove the training path, not language quality.
 | Immutable BF16 base | PASS | `zai-org/GLM-5.2@cf457fa734ab149ffef225f80893eb38c6ff5cdc` and locked `config.json` hash |
 | Teacher-free quality mixture | PASS | `targeted-template-v2`, 2,728 rows, three no-truncation buckets, mixture SHA-256 `9a961a52595df23e8f5c110c780297d9470a5a6c1e36d831346c67254a26318f` |
 | Full-width surgery LoRA | PASS | finite backward, adapter export/reload, and MLA+`lm_head` ablation on the 9B fixture |
-| Tensor/expert sharding gates | PASS | TP2 evidence `80ce91da…958`; EP2 evidence `a6a739c9…e13` |
-| Full TP8/EP32 config | PASS, runtime pending | 64-H200 planning profile; this is not a memory or training pass |
+| Tensor/expert sharding gates | PASS | TP2 `80ce91da…958`; EP2 `a6a739c9…e13`; combined TP2xEP2 `dbf6d87a…711` |
+| Full topology configs | PASS, runtime pending | W8/EP8, W16/EP16, and W32/EP32 Hydra resolution at TP8; capacity dispositions are analytic, not training passes |
 | Full HF checkpoint load contract | PASS, metadata only | exact 282-shard headers; separate 24 MiB expert tensors, 1.773 GiB max source tensor, 4.802 TiB MTP-disabled logical reads (4.871 TiB whole-checkpoint upper bound) |
 | Full base held-out predictions | PENDING | raw JSONL with prompt and decoding-contract hashes |
 | Full MLA-only adapter | PENDING | H200 training checkpoint and run evidence |
@@ -29,8 +29,29 @@ The 9B surgery results prove the training path, not language quality.
    decoding contract.
 5. Select an adapter only on validation. Report the untouched test split once.
 
-The launchers intentionally use different acknowledgement strings and run
-directories, so one profile cannot overwrite or masquerade as the other.
+The launchers intentionally use different topology-specific acknowledgement
+strings and run directories, so one profile cannot overwrite or masquerade as
+the other. Before checkpoint scanning, a real launch queries every allocated
+visible GPU with `nvidia-smi` and requires the selected topology to be a
+planner `CANDIDATE`; pool names are not treated as hardware evidence.
+
+## Full topology gate
+
+Use `plan_full_sft_topologies.py` on the immutable 3.7-KiB config before making
+an allocation. For the locked seq768 mixture, current calibrated envelopes
+are:
+
+| topology | dense DP | expert DP | envelope/GPU | example disposition |
+|---|---:|---:|---:|---|
+| W8 / TP8 / EP8 / ETP1 | 1 | 1 | 228.573 GiB | candidate at measured 270 GiB; static reject at 141 GiB |
+| W16 / TP8 / EP16 / ETP1 | 2 | 1 | 144.198 GiB | envelope reject at 141 GiB |
+| W32 / TP8 / EP32 / ETP1 | 4 | 1 | 102.011 GiB | candidate at measured 141 GiB |
+| W64 / TP8 / EP32 / ETP1 | 8 | 2 | 102.011 GiB | candidate at measured 141 GiB; twice the expert source reads of W32 |
+
+The planner adds a separate 8-GiB minimum headroom requirement after the
+padded envelope. A `CANDIDATE` is permission only for a guarded first runtime
+qualification; it is not evidence that Bridge import, collectives, DSA, or
+backward fit the full checkpoint.
 
 ## Exact SGLang generation contract
 
@@ -124,6 +145,18 @@ python examples/glm52_lora/verify_full_sft_config.py \
 
 Expected global trainable counts are 106,149,888 for MLA-only and 108,726,272
 for MLA+`lm_head`. At TP8 their local counts are 29,552,640 and 29,874,688.
+
+For a non-default topology, pass the same expected dimensions to the config
+validator. For example, W32/TP8/EP32 on four eight-GPU nodes uses:
+
+```bash
+python examples/glm52_lora/verify_full_sft_config.py resolved-mla-only.yaml \
+  --expected-nnodes 4 --expected-gpus-per-node 8 \
+  --expected-tp 8 --expected-ep 32 --expected-etp 1 \
+  --expected-max-length 768 --expected-steps 33 \
+  --expected-train-file-count 3 --expected-val-file-count 3 \
+  --expected-lora-profile mla-only
+```
 
 ## Quality decision
 

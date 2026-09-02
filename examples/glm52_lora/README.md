@@ -496,10 +496,13 @@ prefer it; that choice remains a controlled full-model held-out ablation.
 ## Full-model SFT qualification profile
 
 `run_full_sft_megatron.sh` is the fail-closed 753B qualification profile. It
-locks the immutable GLM-5.2 config and targeted train/validation hashes, five
-MLA targets at rank 16 / alpha 32, sequence length 256, and a calculated
-64-H200 candidate topology (TP8, EP32, dense-DP8, expert-DP2). This topology
-is process-grid-valid but has not run the full 753B checkpoint. Resolve it
+locks the immutable GLM-5.2 config and targeted train/validation hashes plus
+five MLA targets at rank 16 / alpha 32. The bounded smoke defaults to sequence
+length 256; the locked quality mixture uses 768. The launcher defaults to the
+original W64/TP8/EP32 plan. The currently qualified family accepts explicit
+W/EP choices with TP8, ETP1, PP1, CP1, eight GPUs per node, and EP8/16/32.
+Every real launch must pass the memory planner using the smallest capacity
+reported by `nvidia-smi` across the allocated visible GPUs. Resolve a config
 without a model download or GPU:
 
 ```bash
@@ -523,6 +526,22 @@ python examples/glm52_lora/estimate_full_sft_memory.py \
   --expect-policy-parameters 743377000704
 ```
 
+Compare candidate process grids before reserving hardware:
+
+```bash
+python examples/glm52_lora/plan_full_sft_topologies.py \
+  /path/to/GLM-5.2/config.json \
+  --candidate 8:8:8:1 --candidate 16:8:16:1 \
+  --candidate 32:8:32:1 --candidate 64:8:32:1 \
+  --device-capacity-gib 141 --sequence-length 768
+```
+
+The syntax is `WORLD:TP:EP:ETP[:PP[:CP]]`. A real launcher adds
+`--require-candidate`, so `MARGINAL` and every `REJECT-*` result stop before
+checkpoint scanning or `torchrun`. Capacity is measured, never inferred from
+a pool or accelerator name. The planner can compare broader process grids,
+but the real launcher rejects grids outside the empirically resolved family.
+
 The analytic split is 724,775,731,200 routed-expert parameters,
 1,573,443,840 TP-replicated parameters, and 17,027,825,664 TP-sharded
 parameters. It exactly reproduces both the official 743,377,000,704-policy
@@ -531,14 +550,17 @@ runs. At TP8/EP32/ETP1 each rank holds 26,351,163,648 base parameters
 (`49.083 GiB` BF16) and 29,552,640 rank-16 adapter parameters. A conservative
 16-byte adapter-state estimate makes the static total `49.523 GiB` per GPU.
 
-Scaling the measured 9B seq768 non-static allocation linearly by policy
-layers and tokens projects `79.182 GiB` PyTorch allocated for the full model.
-The estimator also reports a deliberately padded `102.011 GiB` planning
-envelope (1.5x that dynamic projection plus 8 GiB for non-PyTorch CUDA and
-communication workspaces). Neither number is a runtime proof: conversion
+For W32/TP8/EP32, scaling the measured 9B seq768 non-static allocation by
+policy layers and tokens projects `79.182 GiB` PyTorch allocated. The
+estimator reports a deliberately padded `102.011 GiB` planning envelope
+(static state plus 1.5x the projected non-static residual and 8 GiB for
+non-PyTorch CUDA and communication workspaces). At seq768, the corresponding
+envelopes are `228.573 GiB` for
+W8/TP8/EP8 and `144.198 GiB` for W16/TP8/EP16. Consequently W8 is a candidate
+at measured 270 GiB, W16 is rejected at 141 GiB, and W32 is a candidate at
+141 GiB. These are analytic dispositions, not runtime proofs: conversion
 staging, allocator behavior, collectives, and the real 78-layer DSA schedule
-can differ. They justify an H200 qualification attempt, not an automatic
-launch.
+can differ. They authorize only a guarded first qualification attempt.
 
 For the pinned authentic-Russian sample, keep the same fail-closed full-model
 profile but replace the dataset locks and audited sequence bound:
@@ -558,9 +580,10 @@ python examples/glm52_lora/verify_full_sft_config.py \
 
 The validator reports `CONFIG-PASS/RUNTIME-PENDING`; this is not a claim that
 the 753B checkpoint has trained. A real launch additionally requires the exact
-snapshot sentinel, eight exclusive H200s on every node, an explicit operator
-acknowledgement, and the exact evidence roots from the passed TP2 adapter
-save/reload and EP2 expert-routing save/reload gates.
+snapshot sentinel, exactly the requested number of idle visible GPUs on every
+node, a measured-capacity planner `CANDIDATE`, a topology-specific operator
+acknowledgement, and the exact evidence roots from the passed TP2 adapter,
+EP2 expert-routing, and combined TP2xEP2 save/reload gates.
 
 Before `torchrun`, every node also runs `audit_full_checkpoint_loading.py`.
 It reads only the 7.12 MiB of safetensors JSON headers, never tensor payloads,
@@ -620,9 +643,11 @@ MLA+`lm_head` adds 322,048 local parameters over the 29,552,640-parameter
 MLA-only adapter. The second full-model run is conditional: evaluate MLA-only
 first rather than launching both experiments together.
 
-This wrapper remains fail-closed on the same explicit 64-H200 acknowledgement
-and exact TP2/EP2 evidence roots. `CONFIG-PASS/RUNTIME-PENDING` is not
-permission or evidence for a full-model launch.
+This wrapper remains fail-closed on a topology-specific acknowledgement such
+as `GLM52_FULL_W32_TP8_EP32_MLA_R16`, the exact three sharding evidence roots,
+idle-device checks, and a measured-capacity planner pass.
+`CONFIG-PASS/RUNTIME-PENDING` is not permission or evidence for a full-model
+launch.
 
 Keep activation recomputation disabled for this short-sequence BSHD profile.
 An empirical 9B run with uniform one-layer full recomputation failed because
