@@ -5,7 +5,10 @@ Snapshot date: 2026-09-02.
 ## Decision
 
 Use VERL's Megatron trainer with NVIDIA Megatron Bridge for the first full
-GLM-5.2 LoRA SFT. Keep SGLang for held-out generation and optional
+GLM-5.2 LoRA SFT. Import the exact official block-FP8 checkpoint and
+dequantize each source tensor to resident BF16 before Megatron mapping. This
+is BF16 LoRA training from the official FP8 artifact, not FP8 compute or
+QLoRA. Keep SGLang for held-out generation and optional
 constraint-GRPO after SFT. Do not put AutoModel's trainer inside VERL and do
 not use Slime as the LoRA trainer.
 
@@ -18,6 +21,30 @@ linear_kv_down_proj
 linear_kv_up_proj
 linear_proj
 ```
+
+The full checkpoint header gate reads no tensor payload. It found 141 shards,
+59,044 E4M3 weights, and exactly 59,044 FP32 inverse-scale tensors, with every
+scale matching the declared 128x128 block geometry. The 78-layer policy part
+is 745,584,507,456 source bytes and expands to 1,486,754,078,208 bytes in BF16,
+exactly matching the previously audited BF16 policy checkpoint. At
+W128/TP8/EP128, expert tensors are read once while non-expert tensors are read
+by 128 ranks, for 3.061 TiB of logical source traffic. The topology remains a
+capacity-qualified candidate until a real full-checkpoint run completes.
+
+Megatron Bridge merged the required
+[GLM-5 FP8 import fix](https://github.com/NVIDIA-NeMo/Megatron-Bridge/pull/5851)
+as `44c871b`. It applies each weight's own `_scale_inv`, including compound
+gated-MLP mappings, before conversion. Our qualified dependency stack stays
+on Bridge `d0c6228` and cherry-picks that exact two-file change; the launcher
+locks its stable diff SHA-256. This avoids silently upgrading unrelated Bridge
+dependencies while preserving the upstream implementation.
+
+The import path was exercised on the 9B surgery pair against a BF16 control.
+Both completed two SFT updates with finite gradients and the same 16.852 GiB
+CUDA allocation peak. The FP8-source loss was `13.4675 -> 12.3566`; the BF16
+control was `14.0332 -> 12.3654`. Both exported 13,608,960-parameter adapters
+with every LoRA-B tensor nonzero. This validates import and training mechanics,
+not full-model quality.
 
 This is the smallest profile with direct full-model evidence. NVIDIA's current
 [verification card](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/08fc1c60ecb7cb5421ef3fdab0494d9a5b65e678/examples/model_verification_cards/glm5-2/card.yaml)
@@ -139,7 +166,9 @@ behavior, or a multi-rank topology that has not itself been run.
 
 The experiment order is therefore:
 
-1. MLA-only rank 16 on the pinned full BF16 checkpoint.
+1. MLA-only rank 16 on the pinned official FP8 checkpoint, dequantized to BF16
+   during Bridge import. Keep the independently pinned BF16 artifact as the
+   numerical oracle where it is available.
 2. Compare base and adapter on identical held-out prompts with the locked
    decoding contract and paired evaluator.
 3. If capacity is insufficient, ablate `lm_head`, then dense/shared MLP.

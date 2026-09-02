@@ -48,6 +48,17 @@ def test_full_topology_uses_independent_dense_and_expert_grids() -> None:
     }
 
 
+def test_full_topology_supports_w128_tp8_ep128_candidate() -> None:
+    config = valid_topology_config()
+    config["trainer"]["nnodes"] = 16
+    config["engine"]["expert_model_parallel_size"] = 128
+    result = compute_parallel_topology(config)
+    assert result["world_size"] == 128
+    assert result["dense_dp"] == 16
+    assert result["expert_dp"] == 1
+    assert result["experts_per_ep_rank"] == 2
+
+
 def test_full_topology_rejects_invalid_dense_grid() -> None:
     config = deepcopy(valid_topology_config())
     config["engine"]["tensor_model_parallel_size"] = 3
@@ -130,7 +141,11 @@ def test_full_launch_has_two_locked_lora_profiles() -> None:
     assert '"engine.seed=${seed}"' in launcher
     assert '"trainer.seed=${seed}"' in launcher
     assert "qualified full-model family requires 8 GPUs/node, TP8, ETP1, PP1, and CP1" in launcher
-    assert 'requires EP in {8,16,32}' in launcher
+    assert 'requires EP in {8,16,32,128}' in launcher
+    assert "official-fp8-dequant" in launcher
+    assert "--official-profile" in launcher
+    assert "expected_bridge_fp8_patch_sha256" in launcher
+    assert "MODEL_SOURCE_IDENTITY" in launcher
 
     head_wrapper = (
         ROOT

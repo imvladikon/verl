@@ -9,6 +9,9 @@ branch=${GLM_BRANCH:-glm-5.2}
 python_seed=${PYTHON_SEED:-python3.12}
 phase=${GLM52_SETUP_PHASE:-all}
 bridge_revision=${MEGATRON_BRIDGE_REVISION:-d0c6228a2a832f566dd44a3a179b3136613c11b7}
+bridge_fp8_import_revision=${MEGATRON_BRIDGE_FP8_IMPORT_REVISION:-44c871b4eab107028933ea1a3aaa42dacc260c1c}
+bridge_fp8_import_patch_sha256=${MEGATRON_BRIDGE_FP8_IMPORT_PATCH_SHA256:-d5764f406994684392cb78bc2977b6ca90a30680c448022742023d9c1298c590}
+apply_bridge_fp8_import=${APPLY_MEGATRON_BRIDGE_FP8_IMPORT:-1}
 transformer_engine_version=${TRANSFORMER_ENGINE_VERSION:-2.18.0}
 modelopt_version=${MODELOPT_VERSION:-0.46.0rc1}
 
@@ -35,10 +38,29 @@ if [[ "${phase}" == "all" || "${phase}" == "clone" ]]; then
   git clone --filter=blob:none https://github.com/NVIDIA-NeMo/Megatron-Bridge.git \
     "${root}/src/Megatron-Bridge"
   git -C "${root}/src/Megatron-Bridge" checkout "${bridge_revision}"
+  if [[ "${apply_bridge_fp8_import}" == 1 ]]; then
+    git -C "${root}/src/Megatron-Bridge" \
+      -c user.name='Hersh Godse' -c user.email='hersh.godse@gmail.com' \
+      cherry-pick "${bridge_fp8_import_revision}"
+    actual_patch_sha256=$(
+      git -C "${root}/src/Megatron-Bridge" diff \
+        "${bridge_revision}..HEAD" -- \
+        src/megatron/bridge/models/glm_moe_dsa/glm5_bridge.py \
+        tests/unit_tests/models/glm_moe_dsa/test_glm5_bridge.py |
+        sha256sum | cut -d' ' -f1
+    )
+    if [[ "${actual_patch_sha256}" != "${bridge_fp8_import_patch_sha256}" ]]; then
+      echo "Megatron Bridge FP8 import patch drift: expected=${bridge_fp8_import_patch_sha256} actual=${actual_patch_sha256}" >&2
+      exit 2
+    fi
+  elif [[ "${apply_bridge_fp8_import}" != 0 ]]; then
+    echo "APPLY_MEGATRON_BRIDGE_FP8_IMPORT must be 0 or 1" >&2
+    exit 2
+  fi
 fi
 
 if [[ "${phase}" == "clone" ]]; then
-  echo "Clone phase complete below ${root}/src; apply the bounded validation overlay, then run with GLM52_SETUP_PHASE=install."
+  echo "Clone phase complete below ${root}/src; run with GLM52_SETUP_PHASE=install after reviewing the resolved sources."
   exit 0
 fi
 
@@ -48,6 +70,34 @@ for repository in verl sglang Megatron-LM slime Megatron-Bridge; do
     exit 2
   fi
 done
+bridge_root=${root}/src/Megatron-Bridge
+if [[ -n "$(git -C "${bridge_root}" status --porcelain)" ]]; then
+  echo "Megatron Bridge checkout must be clean" >&2
+  exit 2
+fi
+if [[ "${apply_bridge_fp8_import}" == 1 ]]; then
+  if ! git -C "${bridge_root}" merge-base --is-ancestor "${bridge_revision}" HEAD; then
+    echo "Megatron Bridge does not descend from ${bridge_revision}" >&2
+    exit 2
+  fi
+  if [[ "$(git -C "${bridge_root}" rev-list --count "${bridge_revision}..HEAD")" != 1 ]]; then
+    echo "Megatron Bridge FP8 import overlay must contain exactly one commit" >&2
+    exit 2
+  fi
+  actual_patch_sha256=$(
+    git -C "${bridge_root}" diff "${bridge_revision}..HEAD" -- \
+      src/megatron/bridge/models/glm_moe_dsa/glm5_bridge.py \
+      tests/unit_tests/models/glm_moe_dsa/test_glm5_bridge.py |
+      sha256sum | cut -d' ' -f1
+  )
+  if [[ "${actual_patch_sha256}" != "${bridge_fp8_import_patch_sha256}" ]]; then
+    echo "Megatron Bridge FP8 import patch drift: expected=${bridge_fp8_import_patch_sha256} actual=${actual_patch_sha256}" >&2
+    exit 2
+  fi
+elif [[ "$(git -C "${bridge_root}" rev-parse HEAD)" != "${bridge_revision}" ]]; then
+  echo "Megatron Bridge revision drift without FP8 import overlay" >&2
+  exit 2
+fi
 if [[ -e "${root}/.venv" ]]; then
   echo "refusing to overwrite existing venv: ${root}/.venv" >&2
   exit 2

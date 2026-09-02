@@ -20,6 +20,7 @@ steps=${STEPS:-8}
 max_length=${MAX_LENGTH:-256}
 required_max_tokens=${REQUIRED_MAX_TOKENS:-187}
 qualification_profile=${QUALIFICATION_PROFILE:-bounded}
+checkpoint_profile=${CHECKPOINT_PROFILE:-official-bf16}
 lora_profile=${LORA_PROFILE:-mla-only}
 seed=${SEED:-52}
 nnodes=${NNODES:-8}
@@ -36,15 +37,34 @@ master_addr=${MASTER_ADDR:-}
 master_port=${MASTER_PORT:-29500}
 config_only=${CONFIG_ONLY:-0}
 
-expected_model_revision=cf457fa734ab149ffef225f80893eb38c6ff5cdc
-expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a
-expected_index_sha256=5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e
 expected_bridge_revision=d0c6228a2a832f566dd44a3a179b3136613c11b7
+expected_bridge_fp8_patch_sha256=d5764f406994684392cb78bc2977b6ca90a30680c448022742023d9c1298c590
 expected_tp_adapter_gate_sha256=80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958
 expected_ep_routing_gate_sha256=a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13
 expected_tp_ep_gate_sha256=dbf6d87a6ffdb2065a5a6bb066558d92a07aff8f63e7a0192ff257da2ebca711
 expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
 expected_val_sha256=${EXPECTED_VAL_SHA256:-df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87}
+
+case "${checkpoint_profile}" in
+  official-bf16)
+    expected_model_revision=cf457fa734ab149ffef225f80893eb38c6ff5cdc
+    expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a
+    expected_index_sha256=5fd47a926aefce0f2c917f42523e5e0f3c87e23e389e767c3681536a62f5cf5e
+    profile_ack_suffix=
+    official_audit_profile=bf16
+    ;;
+  official-fp8-dequant)
+    expected_config_sha256=d1539d36be7546a1d827fe9cf74c55874695652efb6a5aaa3e60cde1c76ba819
+    expected_index_sha256=e0fe7f28c1f853d4824e4d796374e3dacf1fe470988773952c79b063768134bf
+    expected_model_source_identity='glm52-official-fp8-d1539d36-e0fe7f28'
+    profile_ack_suffix=_FP8_DEQUANT
+    official_audit_profile=fp8-dequant
+    ;;
+  *)
+    echo "unknown CHECKPOINT_PROFILE: ${checkpoint_profile}" >&2
+    exit 2
+    ;;
+esac
 
 for integer_setting in rank alpha steps max_length required_max_tokens nnodes gpus_per_node tp_size ep_size etp_size pp_size cp_size global_batch_size node_rank master_port seed; do
   integer_value=${!integer_setting}
@@ -81,8 +101,8 @@ if (( gpus_per_node != 8 || tp_size != 8 || etp_size != 1 || pp_size != 1 || cp_
   echo "qualified full-model family requires 8 GPUs/node, TP8, ETP1, PP1, and CP1" >&2
   exit 2
 fi
-if (( ep_size != 8 && ep_size != 16 && ep_size != 32 )); then
-  echo "qualified full-model family requires EP in {8,16,32}" >&2
+if (( ep_size != 8 && ep_size != 16 && ep_size != 32 && ep_size != 128 )); then
+  echo "qualified full-model family requires EP in {8,16,32,128}" >&2
   exit 2
 fi
 if (( tp_size > 1 )); then
@@ -96,13 +116,13 @@ case "${lora_profile}" in
     planner_profile_args=()
     bridge_targets='[linear_q_down_proj,linear_q_up_proj,linear_kv_down_proj,linear_kv_up_proj,linear_proj]'
     experiment_name=full-sft-mla-r16
-    required_ack=GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_R16
+    required_ack=GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_R16${profile_ack_suffix}
     ;;
   mla-lm-head)
     planner_profile_args=(--include-output-layer)
     bridge_targets='[linear_q_down_proj,linear_q_up_proj,linear_kv_down_proj,linear_kv_up_proj,linear_proj,output_layer]'
     experiment_name=full-sft-mla-lm-head-r16
-    required_ack=GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_LM_HEAD_R16
+    required_ack=GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_LM_HEAD_R16${profile_ack_suffix}
     ;;
   *)
     echo "unknown LORA_PROFILE: ${lora_profile}" >&2
@@ -177,9 +197,14 @@ if [[ "${config_only}" != 1 ]]; then
     echo "full checkpoint index is missing: ${model_path}/model.safetensors.index.json" >&2
     exit 4
   fi
-  if [[ ! -f "${model_path}/.glm52_snapshot_revision" ]] ||
-     [[ "$(<"${model_path}/.glm52_snapshot_revision")" != "${expected_model_revision}" ]]; then
-    echo "missing or wrong immutable snapshot revision sentinel" >&2
+  if [[ "${checkpoint_profile}" == official-bf16 ]]; then
+    if [[ ! -f "${model_path}/.glm52_snapshot_revision" ]] ||
+       [[ "$(<"${model_path}/.glm52_snapshot_revision")" != "${expected_model_revision}" ]]; then
+      echo "missing or wrong immutable snapshot revision sentinel" >&2
+      exit 4
+    fi
+  elif [[ "${MODEL_SOURCE_IDENTITY:-}" != "${expected_model_source_identity}" ]]; then
+    echo "set MODEL_SOURCE_IDENTITY=${expected_model_source_identity} for the audited YT checkpoint" >&2
     exit 4
   fi
   : "${master_addr:?Set MASTER_ADDR for the multinode torchrun job}"
@@ -219,13 +244,48 @@ if [[ "${config_only}" != 1 ]]; then
     "${expected_index_sha256}" \
     "model index"
   bridge_head=$(git -C "${megatron_bridge_root}" rev-parse HEAD)
-  if [[ "${bridge_head}" != "${expected_bridge_revision}" ]]; then
-    echo "Megatron Bridge revision mismatch: expected=${expected_bridge_revision} actual=${bridge_head}" >&2
-    exit 4
-  fi
   if [[ -n "$(git -C "${megatron_bridge_root}" status --porcelain)" ]]; then
     echo "Megatron Bridge checkout must be clean for the full-model import" >&2
     exit 4
+  fi
+  bridge_audit_args=(--bridge-revision "${bridge_head}")
+  if [[ "${checkpoint_profile}" == official-bf16 ]]; then
+    if [[ "${bridge_head}" != "${expected_bridge_revision}" ]]; then
+      echo "Megatron Bridge revision mismatch: expected=${expected_bridge_revision} actual=${bridge_head}" >&2
+      exit 4
+    fi
+  else
+    if ! git -C "${megatron_bridge_root}" merge-base --is-ancestor \
+      "${expected_bridge_revision}" HEAD; then
+      echo "Megatron Bridge does not descend from ${expected_bridge_revision}" >&2
+      exit 4
+    fi
+    if [[ "$(git -C "${megatron_bridge_root}" rev-list --count "${expected_bridge_revision}..HEAD")" != 1 ]]; then
+      echo "Megatron Bridge FP8 import overlay must contain exactly one commit" >&2
+      exit 4
+    fi
+    expected_bridge_files=$'src/megatron/bridge/models/glm_moe_dsa/glm5_bridge.py\ntests/unit_tests/models/glm_moe_dsa/test_glm5_bridge.py'
+    actual_bridge_files=$(git -C "${megatron_bridge_root}" diff --name-only \
+      "${expected_bridge_revision}..HEAD")
+    if [[ "${actual_bridge_files}" != "${expected_bridge_files}" ]]; then
+      echo "Megatron Bridge FP8 import overlay changed unexpected files" >&2
+      exit 4
+    fi
+    bridge_patch_sha256=$(
+      git -C "${megatron_bridge_root}" diff \
+        "${expected_bridge_revision}..HEAD" -- \
+        src/megatron/bridge/models/glm_moe_dsa/glm5_bridge.py \
+        tests/unit_tests/models/glm_moe_dsa/test_glm5_bridge.py |
+        sha256sum | cut -d' ' -f1
+    )
+    if [[ "${bridge_patch_sha256}" != "${expected_bridge_fp8_patch_sha256}" ]]; then
+      echo "Megatron Bridge FP8 import patch drift: expected=${expected_bridge_fp8_patch_sha256} actual=${bridge_patch_sha256}" >&2
+      exit 4
+    fi
+    bridge_audit_args+=(
+      --bridge-base-revision "${expected_bridge_revision}"
+      --bridge-patch-sha256 "${bridge_patch_sha256}"
+    )
   fi
   min_gpu_capacity_gib=$(awk -v capacity_mib="${min_gpu_total_mib}" \
     'BEGIN { printf "%.6f", capacity_mib / 1024 }')
@@ -244,8 +304,8 @@ if [[ "${config_only}" != 1 ]]; then
     --world-size "${world_size}" \
     --tp "${tp_size}" --ep "${ep_size}" --etp "${etp_size}" \
     --pp "${pp_size}" --cp "${cp_size}" \
-    --bridge-revision "${bridge_head}" \
-    --official-glm52 \
+    "${bridge_audit_args[@]}" \
+    --official-profile "${official_audit_profile}" \
     > "${run_dir}/full-hf-load-audit-node${node_rank}.json"
 fi
 export CUDA_DEVICE_MAX_CONNECTIONS=1

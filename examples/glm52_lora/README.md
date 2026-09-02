@@ -116,10 +116,12 @@ MLA-only save/reload, sharding, hot-sync, and finite-gradient gates pass.
 
 `setup_vm_env.sh` creates a new checkout and venv and refuses to overwrite an
 existing environment. It installs all four GitHub forks with normal dependency
-resolution, checks out Megatron Bridge at the recorded exact revision, and
-installs the matching CUDA-13 Transformer Engine and NVIDIA ModelOpt version
-recorded by Bridge (needed by adapter-only checkpoint filtering). Bridge is
-imported directly from that exact source checkout because its published
+resolution, checks out Megatron Bridge at the recorded base revision, and
+cherry-picks the exact upstream GLM-5 FP8 dequantization change. It verifies
+the two-file diff hash before installation, then installs the matching CUDA-13
+Transformer Engine and NVIDIA ModelOpt version recorded by Bridge (needed by
+adapter-only checkpoint filtering). Bridge is imported directly from that
+source checkout because its published
 all-model metadata pins an older Transformers and adds unrelated diffusion
 dependencies. No dependency is installed with `--no-deps`; existing venvs and
 Ray clusters are untouched.
@@ -500,7 +502,9 @@ locks the immutable GLM-5.2 config and targeted train/validation hashes plus
 five MLA targets at rank 16 / alpha 32. The bounded smoke defaults to sequence
 length 256; the locked quality mixture uses 768. The launcher defaults to the
 original W64/TP8/EP32 plan. The currently qualified family accepts explicit
-W/EP choices with TP8, ETP1, PP1, CP1, eight GPUs per node, and EP8/16/32.
+W/EP choices with TP8, ETP1, PP1, CP1, eight GPUs per node, and
+EP8/16/32/128. The header- and capacity-qualified first official-FP8
+candidate is W128/TP8/EP128; it is still runtime-pending.
 Every real launch must pass the memory planner using the smallest capacity
 reported by `nvidia-smi` across the allocated visible GPUs. Resolve a config
 without a model download or GPU:
@@ -533,6 +537,7 @@ python examples/glm52_lora/plan_full_sft_topologies.py \
   /path/to/GLM-5.2/config.json \
   --candidate 8:8:8:1 --candidate 16:8:16:1 \
   --candidate 32:8:32:1 --candidate 64:8:32:1 \
+  --candidate 128:8:128:1 \
   --device-capacity-gib 141 --sequence-length 768
 ```
 
@@ -562,6 +567,31 @@ at measured 270 GiB, W16 is rejected at 141 GiB, and W32 is a candidate at
 staging, allocator behavior, collectives, and the real 78-layer DSA schedule
 can differ. They authorize only a guarded first qualification attempt.
 
+For the available 80-GiB allocation, W128/TP8/EP128 has 17.883 GiB of static
+BF16 model and rank-16 MLA adapter state per GPU. The measured-surgery
+projection is 47.541 GiB and the padded planning envelope is 70.370 GiB,
+leaving 9.63 GiB against nominal 80 GiB. Use `NNODES=16 EP_SIZE=128` and the
+FP8-dequant checkpoint profile; this is a capacity candidate, not a claim that
+the full import or first optimizer step has completed.
+
+The official FP8 profile is selected explicitly. The source identity is a
+configuration lock; an infrastructure-specific delivery recipe must
+separately bind it to an immutable object-store node and revision:
+
+```bash
+CHECKPOINT_PROFILE=official-fp8-dequant \
+MODEL_SOURCE_IDENTITY=glm52-official-fp8-d1539d36-e0fe7f28 \
+NNODES=16 TP_SIZE=8 EP_SIZE=128 \
+MODEL_PATH=/path/to/materialized/official/GLM-5.2-FP8 \
+TRAIN_FILE=/path/to/sft_train.parquet \
+VAL_FILE=/path/to/sft_validation.parquet \
+examples/glm52_lora/run_full_sft_megatron.sh
+```
+
+For a config-only render of that topology, add `CONFIG_ONLY=1` and validate
+the result with `verify_full_sft_config.py --expected-nnodes 16
+--expected-ep 128`.
+
 For the pinned authentic-Russian sample, keep the same fail-closed full-model
 profile but replace the dataset locks and audited sequence bound:
 
@@ -586,8 +616,9 @@ acknowledgement, and the exact evidence roots from the passed TP2 adapter,
 EP2 expert-routing, and combined TP2xEP2 save/reload gates.
 
 Before `torchrun`, every node also runs `audit_full_checkpoint_loading.py`.
-It reads only the 7.12 MiB of safetensors JSON headers, never tensor payloads,
-and requires the exact 282-shard index. The pinned checkpoint contains 58,368
+For the BF16 profile it reads only the 7.12 MiB of safetensors JSON headers,
+never tensor payloads, and requires the exact 282-shard index. That checkpoint
+contains 58,368
 separate routed-expert tensors: each expert projection is 24 MiB rather than a
 single stacked terabyte-scale tensor. Of those, 768 belong to the disabled MTP
 layer 78, leaving 57,600 expert tensors in the policy import. The largest
@@ -603,6 +634,14 @@ Shared filesystem page cache may lower physical backing-store traffic, but the
 launch gate does not assume it. Each node writes its own
 `full-hf-load-audit-nodeN.json`; use those files to separate slow streaming
 from a deadlock during the first full qualification.
+
+The `official-fp8-dequant` profile instead locks 141 shards, 59,044 E4M3
+weights, their 59,044 FP32 inverse scales, every 128x128 scale shape, and the
+BF16 exclusion list. Its 703.723-GiB source expands tensor-by-tensor to the
+same 1,486,754,078,208-byte policy representation as the BF16 checkpoint. At
+W128/TP8/EP128, the corresponding logical source traffic is 3.061 TiB. The
+launcher also requires the exact upstream Bridge FP8-import diff on top of
+the qualified Bridge base before it can reach `torchrun`.
 
 The production candidate consumes all three locked train buckets in one
 optimizer stream and all three disjoint validation buckets at the final step.
