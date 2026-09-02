@@ -73,3 +73,45 @@ bridge and preserves the surgery model's full-width MLA/DSA/MoE contract:
 ```bash
 python examples/glm52_lora/verify_bridge_contract.py
 ```
+
+## Quality data and evaluation
+
+The six-row smoke files above prove integration only. They are not a Russian
+quality corpus. Curated full-model data uses the schema demonstrated by
+`quality_dataset.example.jsonl` and is validated before conversion:
+
+```bash
+python examples/glm52_lora/build_quality_dataset.py \
+  curated_quality.jsonl runs/glm52-quality-data
+```
+
+The builder rejects duplicate/leaking prompts across splits, accidental Han in
+Russian targets, structurally broken Markdown, and Russian targets without
+Cyrillic. It writes SFT parquet files, held-out contracts, and a separately
+named `rl_constraint_smoke.parquet`. The latter is deliberately not a
+production RL dataset because it has no semantic-quality reward.
+
+Evaluate generated base and adapter outputs independently, then compare the
+same held-out IDs:
+
+```bash
+python examples/glm52_lora/evaluate_quality_outputs.py \
+  adapter_predictions.jsonl --details adapter_details.jsonl
+```
+
+Each prediction carries its contract and, when available, exact generated
+token count and a separately produced semantic score. The evaluator reports
+Markdown structural validity, conditional accidental-Han rates, Han per 1,000
+tokens, Russian-script diagnostics, semantic-score coverage, and never
+silently substitutes a character estimate for missing token counts.
+
+`quality_reward.py` is only the deterministic constraint component. It masks
+code, URLs and link destinations, permits Han only under an explicit Chinese,
+Japanese, global, or blockquote contract, and parses CommonMark plus tables.
+Combine it with an independent semantic/task reward after the SFT adapter has
+already passed held-out evaluation.
+
+For the first full-model quality experiment compare rank-16 MLA-only against
+rank-16 MLA plus `lm_head` with identical data, seed, tokens and updates. Do
+not begin with routed-expert LoRA. The surgery checkpoint cannot decide this
+quality comparison; it only qualified the engineering path.

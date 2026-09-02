@@ -29,6 +29,7 @@ install_requires = [
     "datasets",
     "dill",
     "hydra-core",
+    "markdown-it-py",
     "numpy>=2.0.0",
     "pandas",
     "peft",
