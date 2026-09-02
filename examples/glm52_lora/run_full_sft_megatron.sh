@@ -20,6 +20,8 @@ steps=${STEPS:-8}
 max_length=${MAX_LENGTH:-256}
 required_max_tokens=${REQUIRED_MAX_TOKENS:-187}
 qualification_profile=${QUALIFICATION_PROFILE:-bounded}
+lora_profile=${LORA_PROFILE:-mla-only}
+seed=${SEED:-52}
 nnodes=${NNODES:-8}
 gpus_per_node=${GPUS_PER_NODE:-8}
 node_rank=${NODE_RANK:-0}
@@ -34,7 +36,7 @@ expected_ep_routing_gate_sha256=a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17
 expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
 expected_val_sha256=${EXPECTED_VAL_SHA256:-df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87}
 
-for integer_setting in rank alpha steps max_length required_max_tokens nnodes gpus_per_node node_rank master_port; do
+for integer_setting in rank alpha steps max_length required_max_tokens nnodes gpus_per_node node_rank master_port seed; do
   integer_value=${!integer_setting}
   if [[ ! "${integer_value}" =~ ^[0-9]+$ ]]; then
     echo "${integer_setting} must be a non-negative integer, got: ${integer_value}" >&2
@@ -46,6 +48,23 @@ if (( rank != 16 || alpha != 32 )); then
   echo "full-model qualification is locked to rank 16 / alpha 32" >&2
   exit 2
 fi
+
+case "${lora_profile}" in
+  mla-only)
+    bridge_targets='[linear_q_down_proj,linear_q_up_proj,linear_kv_down_proj,linear_kv_up_proj,linear_proj]'
+    experiment_name=full-sft-mla-r16
+    required_ack=GLM52_64H200_MLA_R16
+    ;;
+  mla-lm-head)
+    bridge_targets='[linear_q_down_proj,linear_q_up_proj,linear_kv_down_proj,linear_kv_up_proj,linear_proj,output_layer]'
+    experiment_name=full-sft-mla-lm-head-r16
+    required_ack=GLM52_64H200_MLA_LM_HEAD_R16
+    ;;
+  *)
+    echo "unknown LORA_PROFILE: ${lora_profile}" >&2
+    exit 2
+    ;;
+esac
 case "${qualification_profile}" in
   bounded)
     if (( steps < 2 || steps > 8 )); then
@@ -98,8 +117,8 @@ require_sha256 "${train_file}" "${expected_train_sha256}" "train parquet"
 require_sha256 "${val_file}" "${expected_val_sha256}" "validation parquet"
 
 if [[ "${config_only}" != 1 ]]; then
-  if [[ "${FULL_MODEL_ACK:-}" != GLM52_64H200_MLA_R16 ]]; then
-    echo "set FULL_MODEL_ACK=GLM52_64H200_MLA_R16 after auditing the allocation" >&2
+  if [[ "${FULL_MODEL_ACK:-}" != "${required_ack}" ]]; then
+    echo "set FULL_MODEL_ACK=${required_ack} after auditing the allocation" >&2
     exit 4
   fi
   if [[ "${TP_ADAPTER_GATE_SHA:-}" != "${expected_tp_adapter_gate_sha256}" ]]; then
@@ -148,7 +167,6 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TOKENIZERS_PARALLELISM=false
 export MAX_JOBS=${MAX_JOBS:-4}
 
-bridge_targets='[linear_q_down_proj,linear_q_up_proj,linear_kv_down_proj,linear_kv_up_proj,linear_proj]'
 job_args=(
   engine=megatron
   optim=megatron
@@ -187,6 +205,7 @@ job_args=(
   engine.expert_model_parallel_size=32
   engine.expert_tensor_parallel_size=1
   engine.context_parallel_size=1
+  "engine.seed=${seed}"
   engine.sequence_parallel=true
   engine.param_offload=false
   engine.optimizer_offload=false
@@ -201,7 +220,8 @@ job_args=(
   optim.weight_decay=0.0
   "trainer.default_local_dir=${run_dir}"
   trainer.project_name=glm52-quality
-  trainer.experiment_name=full-sft-mla-r16
+  "trainer.experiment_name=${experiment_name}"
+  "trainer.seed=${seed}"
   trainer.total_epochs=1
   "trainer.total_training_steps=${steps}"
   trainer.save_freq=4

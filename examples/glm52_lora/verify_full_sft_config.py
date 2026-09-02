@@ -11,13 +11,19 @@ import yaml
 
 from estimate_full_sft_memory import EXPECTED_FULL_POLICY_PARAMETERS, estimate
 
-EXPECTED_TARGETS = [
+MLA_TARGETS = [
     "linear_q_down_proj",
     "linear_q_up_proj",
     "linear_kv_down_proj",
     "linear_kv_up_proj",
     "linear_proj",
 ]
+LORA_PROFILES = {
+    "mla-only": MLA_TARGETS,
+    "mla-lm-head": [*MLA_TARGETS, "output_layer"],
+}
+# Kept for callers that imported the original five-target constant.
+EXPECTED_TARGETS = MLA_TARGETS
 EXPECTED_NUM_EXPERTS = 256
 EXPECTED_TP_GATE_SHA256 = (
     "80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958"
@@ -109,12 +115,18 @@ def main() -> None:
     parser.add_argument("--expected-steps", type=int)
     parser.add_argument("--expected-train-file-count", type=int, default=1)
     parser.add_argument("--expected-val-file-count", type=int, default=1)
+    parser.add_argument(
+        "--expected-lora-profile",
+        choices=sorted(LORA_PROFILES),
+        default="mla-only",
+    )
     args = parser.parse_args()
     config = yaml.safe_load(args.resolved_config.read_text(encoding="utf-8"))
 
     require(
-        config["model"]["lora"]["target_modules"] == EXPECTED_TARGETS,
-        "LoRA targets drift",
+        config["model"]["lora"]["target_modules"]
+        == LORA_PROFILES[args.expected_lora_profile],
+        f"LoRA targets drift for profile {args.expected_lora_profile}",
     )
     require(config["model"]["lora"]["rank"] == 16, "rank drift")
     require(config["model"]["lora"]["alpha"] == 32, "alpha drift")
@@ -209,6 +221,7 @@ def main() -> None:
         ep=topology["ep"],
         etp=topology["etp"],
         lora_rank=config["model"]["lora"]["rank"],
+        include_output_layer=args.expected_lora_profile == "mla-lm-head",
         sequence_length=args.expected_max_length,
     )
     require(
@@ -219,6 +232,7 @@ def main() -> None:
     trainable = memory["lora"]["global_parameters"]
     result = {
         "status": "CONFIG-PASS/RUNTIME-PENDING",
+        "lora_profile": args.expected_lora_profile,
         "topology": topology,
         "trainable_parameters": trainable,
         "training_steps": trainer["total_training_steps"],

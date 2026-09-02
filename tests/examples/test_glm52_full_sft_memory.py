@@ -116,11 +116,37 @@ def test_five_target_lora_counts_and_tp_replication() -> None:
     assert full.tp_replicated_parameters == 18_610_176
     assert full.tp_sharded_parameters == 87_539_712
     assert full.local_parameters == 29_552_640
+    assert full.output_layer_parameters == 0
 
     surgery = lora_breakdown(surgery_config(), rank=16, tp=2)
     assert surgery.global_parameters == 13_608_960
     # Exact trainable numel printed by each rank in the qualified TP2 gate.
     assert surgery.local_parameters == 7_997_440
+
+
+def test_mla_lm_head_lora_counts_and_tp_replication() -> None:
+    full = lora_breakdown(
+        full_config(), rank=16, tp=8, include_output_layer=True
+    )
+    assert full.global_parameters == 108_726_272
+    assert full.tp_replicated_parameters == 18_610_176
+    assert full.tp_sharded_parameters == 90_116_096
+    assert full.local_parameters == 29_874_688
+    assert full.output_layer_parameters == 2_576_384
+
+    surgery = lora_breakdown(
+        surgery_config(), rank=16, tp=2, include_output_layer=True
+    )
+    # Exact global trainable numel from the passed 9B export/reload ablation.
+    assert surgery.global_parameters == 16_185_344
+    assert surgery.local_parameters == 9_285_632
+
+
+def test_output_layer_lora_requires_tp_divisible_rank() -> None:
+    with pytest.raises(ValueError, match="output-layer LoRA rank"):
+        lora_breakdown(
+            full_config(), rank=10, tp=8, include_output_layer=True
+        )
 
 
 def test_full_tp8_ep32_static_estimate() -> None:
@@ -139,6 +165,32 @@ def test_full_tp8_ep32_static_estimate() -> None:
     )
     assert projection["planning_envelope_gib"] == pytest.approx(102.010731, abs=1e-6)
     assert projection["runtime_proof"] is False
+
+
+def test_full_tp8_ep32_mla_lm_head_static_estimate() -> None:
+    result = estimate(
+        full_config(),
+        tp=8,
+        ep=32,
+        etp=1,
+        lora_rank=16,
+        include_output_layer=True,
+        sequence_length=768,
+    )
+    assert result["lora"]["global_parameters"] == 108_726_272
+    assert result["lora"]["local_parameters"] == 29_874_688
+    assert result["lora"]["output_layer_parameters"] == 2_576_384
+    assert result["lora_local_16_byte_upper_gib"] == pytest.approx(
+        0.445168, abs=1e-6
+    )
+    assert result["static_upper_gib"] == pytest.approx(49.528035, abs=1e-6)
+    projection = result["empirical_activation_projection"]
+    assert projection["projected_torch_allocated_gib"] == pytest.approx(
+        79.186365, abs=1e-6
+    )
+    assert projection["planning_envelope_gib"] == pytest.approx(
+        102.015529, abs=1e-6
+    )
 
 
 def test_invalid_expert_sharding_fails_closed() -> None:

@@ -11,7 +11,8 @@ repo_root=$(cd -- "${script_dir}/../.." && pwd)
 
 mixture_dir=${MIXTURE_DIR:?Set MIXTURE_DIR to the locked 2,728-row artifact}
 model_path=${MODEL_PATH:?Set MODEL_PATH to the immutable full GLM-5.2 snapshot}
-run_dir=${RUN_DIR:-${repo_root}/runs/glm52-full-locked-quality-mixture}
+lora_profile=${LORA_PROFILE:-mla-only}
+run_dir=${RUN_DIR:-${repo_root}/runs/glm52-full-locked-quality-mixture-${lora_profile}}
 
 declare -Ar expected_sha256=(
   [manifest.json]=e0e471b74d2b56cbbb681f665899d355f2b30505ea93a996cab2cd9187d54aef
@@ -81,4 +82,4 @@ exec "${script_dir}/run_full_sft_megatron.sh" \
   trainer.save_freq=11 \
   trainer.test_freq=33 \
   trainer.max_ckpt_to_keep=3 \
-  trainer.experiment_name=full-sft-locked-mixture-mla-r16
+  "trainer.experiment_name=full-sft-locked-mixture-${lora_profile}-r16"

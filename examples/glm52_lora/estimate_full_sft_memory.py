@@ -63,6 +63,7 @@ class LoraBreakdown:
     tp_replicated_parameters: int
     tp_sharded_parameters: int
     local_parameters: int
+    output_layer_parameters: int
     rank: int
 
 
@@ -183,8 +184,18 @@ def parameter_breakdown(config: dict[str, Any]) -> ParameterBreakdown:
     )
 
 
-def lora_breakdown(config: dict[str, Any], *, rank: int, tp: int) -> LoraBreakdown:
-    """Count the five-target MLA LoRA and its local TP representation."""
+def lora_breakdown(
+    config: dict[str, Any],
+    *,
+    rank: int,
+    tp: int,
+    include_output_layer: bool = False,
+) -> LoraBreakdown:
+    """Count the MLA LoRA, optionally including the untied output layer.
+
+    Megatron's output layer is column-parallel. Its LoRA A rank dimension and
+    LoRA B vocabulary dimension are therefore both represented as TP shards.
+    """
     require(rank > 0 and tp > 0, "LoRA rank and TP must be positive")
     hidden = config_int(config, "hidden_size")
     layers = config_int(config, "num_hidden_layers")
@@ -194,6 +205,7 @@ def lora_breakdown(config: dict[str, Any], *, rank: int, tp: int) -> LoraBreakdo
     qk_nope = config_int(config, "qk_nope_head_dim")
     qk_rope = config_int(config, "qk_rope_head_dim")
     value_head = config_int(config, "v_head_dim")
+    vocab = config_int(config, "vocab_size")
 
     replicated_dimensions = hidden + q_lora + hidden + kv_lora + qk_rope
     sharded_dimensions = (
@@ -206,12 +218,21 @@ def lora_breakdown(config: dict[str, Any], *, rank: int, tp: int) -> LoraBreakdo
     )
     replicated = layers * rank * replicated_dimensions
     sharded = layers * rank * sharded_dimensions
+    output_layer_parameters = 0
+    if include_output_layer:
+        require(
+            rank % tp == 0,
+            f"TP={tp} does not evenly shard output-layer LoRA rank {rank}",
+        )
+        output_layer_parameters = rank * (hidden + vocab)
+        sharded += output_layer_parameters
     require(sharded % tp == 0, f"TP={tp} does not evenly shard MLA LoRA parameters")
     return LoraBreakdown(
         global_parameters=replicated + sharded,
         tp_replicated_parameters=replicated,
         tp_sharded_parameters=sharded,
         local_parameters=replicated + sharded // tp,
+        output_layer_parameters=output_layer_parameters,
         rank=rank,
     )
 
@@ -223,6 +244,7 @@ def estimate(
     ep: int,
     etp: int,
     lora_rank: int,
+    include_output_layer: bool = False,
     sequence_length: int | None = None,
     base_bytes_per_parameter: int = 2,
     conservative_adapter_bytes_per_parameter: int = 16,
@@ -242,7 +264,12 @@ def estimate(
         + breakdown.tp_replicated_parameters
         + breakdown.tp_sharded_parameters // tp
     )
-    adapter = lora_breakdown(config, rank=lora_rank, tp=tp)
+    adapter = lora_breakdown(
+        config,
+        rank=lora_rank,
+        tp=tp,
+        include_output_layer=include_output_layer,
+    )
     base_bytes = base_local * base_bytes_per_parameter
     adapter_upper_bytes = (
         adapter.local_parameters * conservative_adapter_bytes_per_parameter
@@ -314,6 +341,7 @@ def main() -> None:
     parser.add_argument("--ep", type=int, default=32)
     parser.add_argument("--etp", type=int, default=1)
     parser.add_argument("--lora-rank", type=int, default=16)
+    parser.add_argument("--include-output-layer", action="store_true")
     parser.add_argument("--sequence-length", type=int)
     parser.add_argument("--expect-policy-parameters", type=int)
     args = parser.parse_args()
@@ -324,6 +352,7 @@ def main() -> None:
         ep=args.ep,
         etp=args.etp,
         lora_rank=args.lora_rank,
+        include_output_layer=args.include_output_layer,
         sequence_length=args.sequence_length,
     )
     if args.expect_policy_parameters is not None:

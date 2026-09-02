@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "examples" / "glm52_lora"))
 from verify_full_sft_config import (  # noqa: E402
     EXPECTED_EP_GATE_SHA256,
     EXPECTED_TP_GATE_SHA256,
+    LORA_PROFILES,
     compute_parallel_topology,
     file_count,
 )
@@ -89,6 +90,41 @@ def test_full_launch_requires_exact_validated_gate_roots() -> None:
     assert (
         '"${EP_ROUTING_GATE_SHA:-}" != "${expected_ep_routing_gate_sha256}"' in launcher
     )
+
+
+def test_full_launch_has_two_locked_lora_profiles() -> None:
+    assert LORA_PROFILES == {
+        "mla-only": [
+            "linear_q_down_proj",
+            "linear_q_up_proj",
+            "linear_kv_down_proj",
+            "linear_kv_up_proj",
+            "linear_proj",
+        ],
+        "mla-lm-head": [
+            "linear_q_down_proj",
+            "linear_q_up_proj",
+            "linear_kv_down_proj",
+            "linear_kv_up_proj",
+            "linear_proj",
+            "output_layer",
+        ],
+    }
+    launcher = (
+        ROOT / "examples" / "glm52_lora" / "run_full_sft_megatron.sh"
+    ).read_text(encoding="utf-8")
+    assert "GLM52_64H200_MLA_R16" in launcher
+    assert "GLM52_64H200_MLA_LM_HEAD_R16" in launcher
+    assert '"engine.seed=${seed}"' in launcher
+    assert '"trainer.seed=${seed}"' in launcher
+
+    head_wrapper = (
+        ROOT
+        / "examples"
+        / "glm52_lora"
+        / "run_full_sft_mla_lm_head_megatron.sh"
+    ).read_text(encoding="utf-8")
+    assert "export LORA_PROFILE=mla-lm-head" in head_wrapper
 
 
 def test_file_count_normalizes_single_hydra_path() -> None:

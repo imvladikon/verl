@@ -346,6 +346,11 @@ rank-16 MLA plus `lm_head` with identical data, seed, tokens and updates. Do
 not begin with routed-expert LoRA. The surgery checkpoint cannot decide this
 quality comparison; it only qualified the engineering path.
 
+The executable status matrix and sequential decision gate are in
+[`QUALITY_EXECUTION_GATE.md`](QUALITY_EXECUTION_GATE.md). The locked production
+wrappers differ only in adapter surface, acknowledgement, output directory,
+and experiment name; both pin seed 52 and the same 33-update data stream.
+
 The `lm_head` engineering ablation is reproducible with:
 
 ```bash
@@ -447,10 +452,31 @@ examples/glm52_lora/run_full_sft_locked_mixture_megatron.sh \
   > resolved-locked-mixture.yaml
 
 python examples/glm52_lora/verify_full_sft_config.py \
-  resolved-locked-mixture.yaml \
+  resolved-locked-mixture.yaml --expected-lora-profile mla-only \
   --expected-max-length 768 --expected-steps 33 \
   --expected-train-file-count 3 --expected-val-file-count 3
 ```
+
+Resolve the otherwise identical MLA+`lm_head` ablation with:
+
+```bash
+CONFIG_ONLY=1 \
+MODEL_PATH=/path/to/config-only-snapshot \
+MIXTURE_DIR=/path/to/quality-mixture-targeted-wikipedia-2728 \
+examples/glm52_lora/run_full_sft_locked_mixture_mla_lm_head_megatron.sh \
+  > resolved-locked-mixture-mla-lm-head.yaml
+
+python examples/glm52_lora/verify_full_sft_config.py \
+  resolved-locked-mixture-mla-lm-head.yaml \
+  --expected-lora-profile mla-lm-head \
+  --expected-max-length 768 --expected-steps 33 \
+  --expected-train-file-count 3 --expected-val-file-count 3
+```
+
+The two global trainable counts are 106,149,888 and 108,726,272. At TP8,
+MLA+`lm_head` adds 322,048 local parameters over the 29,552,640-parameter
+MLA-only adapter. The second full-model run is conditional: evaluate MLA-only
+first rather than launching both experiments together.
 
 This wrapper remains fail-closed on the same explicit 64-H200 acknowledgement
 and exact TP2/EP2 evidence roots. `CONFIG-PASS/RUNTIME-PENDING` is not
