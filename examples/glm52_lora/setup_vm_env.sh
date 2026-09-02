@@ -5,7 +5,7 @@ set -euo pipefail
 # venvs, Ray clusters, and GPU processes are never modified.
 
 root=${GLM52_VM_ROOT:-$HOME/glm52lora}
-branch=${GLM_BRANCH:-glm-5.3-flash}
+branch=${GLM_BRANCH:-glm-5.2}
 python_seed=${PYTHON_SEED:-python3.12}
 phase=${GLM52_SETUP_PHASE:-all}
 bridge_revision=${MEGATRON_BRIDGE_REVISION:-d0c6228a2a832f566dd44a3a179b3136613c11b7}
