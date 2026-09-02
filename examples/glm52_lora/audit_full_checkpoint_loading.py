@@ -32,6 +32,12 @@ EXPECTED_EXPERT_BYTES = 1_468_878_815_232
 EXPECTED_MAX_TENSOR_BYTES = 1_903_165_440
 EXPECTED_DTYPE_COUNTS = {"BF16": 59_509, "F32": 76}
 EXPECTED_DTYPE_BYTES = {"BF16": 1_506_659_842_048, "F32": 77_824}
+EXPECTED_AUXILIARY_TENSOR_COUNT = 791
+EXPECTED_AUXILIARY_BYTES = 19_905_841_664
+EXPECTED_POLICY_TENSOR_COUNT = 58_794
+EXPECTED_POLICY_BYTES = 1_486_754_078_208
+EXPECTED_POLICY_EXPERT_TENSOR_COUNT = 57_600
+EXPECTED_POLICY_EXPERT_BYTES = 1_449_551_462_400
 EXPECTED_BRIDGE_REVISION = "d0c6228a2a832f566dd44a3a179b3136613c11b7"
 
 DTYPE_BYTES = {
@@ -56,6 +62,7 @@ EXPERT_RE = re.compile(
     r"^model\.layers\.\d+\.mlp\.experts\.\d+\."
     r"(?:gate_proj|up_proj|down_proj)\.weight$"
 )
+LAYER_RE = re.compile(r"^model\.layers\.(\d+)\.")
 MAX_HEADER_BYTES = 64 * 2**20
 
 
@@ -195,6 +202,12 @@ def audit_checkpoint(
     require(index_path.is_file(), f"missing index: {index_path}")
     config_sha = sha256(config_path)
     index_sha = sha256(index_path)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    num_hidden_layers = config.get("num_hidden_layers")
+    require(
+        isinstance(num_hidden_layers, int) and num_hidden_layers > 0,
+        "config num_hidden_layers must be positive",
+    )
     index = json.loads(index_path.read_text(encoding="utf-8"))
     weight_map = index.get("weight_map")
     require(isinstance(weight_map, dict) and weight_map, "missing index weight_map")
@@ -220,6 +233,18 @@ def audit_checkpoint(
     expert_keys = [key for key in tensor_bytes if EXPERT_RE.fullmatch(key)]
     expert_bytes = sum(tensor_bytes[key] for key in expert_keys)
     nonexpert_bytes = calculated_total - expert_bytes
+    auxiliary_keys = []
+    for key in tensor_bytes:
+        layer_match = LAYER_RE.match(key)
+        if layer_match is not None and int(layer_match.group(1)) >= num_hidden_layers:
+            auxiliary_keys.append(key)
+    auxiliary_key_set = set(auxiliary_keys)
+    policy_keys = [key for key in tensor_bytes if key not in auxiliary_key_set]
+    policy_expert_keys = [key for key in expert_keys if key not in auxiliary_key_set]
+    auxiliary_bytes = sum(tensor_bytes[key] for key in auxiliary_keys)
+    policy_bytes = sum(tensor_bytes[key] for key in policy_keys)
+    policy_expert_bytes = sum(tensor_bytes[key] for key in policy_expert_keys)
+    policy_nonexpert_bytes = policy_bytes - policy_expert_bytes
     largest_name, largest_bytes = max(tensor_bytes.items(), key=lambda item: item[1])
 
     gated_bundles = []
@@ -235,9 +260,12 @@ def audit_checkpoint(
     # ETP ranks and expert-DP replicas each read the full source expert tensor.
     nonexpert_read_factor = world_size // pp
     expert_read_factor = world_size // (ep * pp)
-    logical_nonexpert_bytes = nonexpert_bytes * nonexpert_read_factor
-    logical_expert_bytes = expert_bytes * expert_read_factor
+    logical_nonexpert_bytes = policy_nonexpert_bytes * nonexpert_read_factor
+    logical_expert_bytes = policy_expert_bytes * expert_read_factor
     logical_total_bytes = logical_nonexpert_bytes + logical_expert_bytes
+    checkpoint_upper_bound_bytes = (
+        nonexpert_bytes * nonexpert_read_factor + expert_bytes * expert_read_factor
+    )
 
     if official_glm52:
         require(config_sha == EXPECTED_CONFIG_SHA256, "official config SHA-256 drift")
@@ -256,6 +284,24 @@ def audit_checkpoint(
             all(key.endswith(".mlp.gate.e_score_correction_bias") for key in f32_keys),
             "unexpected official FP32 parameter",
         )
+        require(
+            len(auxiliary_keys) == EXPECTED_AUXILIARY_TENSOR_COUNT,
+            "MTP/auxiliary tensor-count drift",
+        )
+        require(
+            auxiliary_bytes == EXPECTED_AUXILIARY_BYTES,
+            "MTP/auxiliary byte-count drift",
+        )
+        require(len(policy_keys) == EXPECTED_POLICY_TENSOR_COUNT, "policy tensor-count drift")
+        require(policy_bytes == EXPECTED_POLICY_BYTES, "policy byte-count drift")
+        require(
+            len(policy_expert_keys) == EXPECTED_POLICY_EXPERT_TENSOR_COUNT,
+            "policy expert tensor-count drift",
+        )
+        require(
+            policy_expert_bytes == EXPECTED_POLICY_EXPERT_BYTES,
+            "policy expert byte-count drift",
+        )
 
     return {
         "status": "CHECKPOINT-LOAD-AUDIT-PASS",
@@ -272,6 +318,17 @@ def audit_checkpoint(
             "nonexpert_bytes": nonexpert_bytes,
             "dtype_counts": dtype_counts,
             "dtype_bytes": dtype_bytes,
+            "auxiliary_tensor_count": len(auxiliary_keys),
+            "auxiliary_bytes": auxiliary_bytes,
+        },
+        "policy_import": {
+            "mtp_enabled": False,
+            "num_hidden_layers": num_hidden_layers,
+            "tensor_count": len(policy_keys),
+            "payload_bytes": policy_bytes,
+            "expert_tensor_count": len(policy_expert_keys),
+            "expert_bytes": policy_expert_bytes,
+            "nonexpert_bytes": policy_nonexpert_bytes,
         },
         "source_working_set": {
             "largest_tensor": largest_name,
@@ -294,6 +351,8 @@ def audit_checkpoint(
             "logical_total_read_bytes": logical_total_bytes,
             "logical_total_read_tib": logical_total_bytes / 2**40,
             "average_logical_read_gib_per_rank": logical_total_bytes / world_size / 2**30,
+            "whole_checkpoint_upper_bound_bytes": checkpoint_upper_bound_bytes,
+            "whole_checkpoint_upper_bound_tib": checkpoint_upper_bound_bytes / 2**40,
             "page_cache_reduction_assumed": False,
         },
         "topology": {

@@ -13,7 +13,7 @@ The 9B surgery results prove the training path, not language quality.
 | Full-width surgery LoRA | PASS | finite backward, adapter export/reload, and MLA+`lm_head` ablation on the 9B fixture |
 | Tensor/expert sharding gates | PASS | TP2 evidence `80ce91da…958`; EP2 evidence `a6a739c9…e13` |
 | Full TP8/EP32 config | PASS, runtime pending | 64-H200 planning profile; this is not a memory or training pass |
-| Full HF checkpoint load contract | PASS, metadata only | exact 282-shard headers; separate 24 MiB expert tensors, 1.773 GiB max source tensor, 4.871 TiB conservative logical job reads |
+| Full HF checkpoint load contract | PASS, metadata only | exact 282-shard headers; separate 24 MiB expert tensors, 1.773 GiB max source tensor, 4.802 TiB MTP-disabled logical reads (4.871 TiB whole-checkpoint upper bound) |
 | Full base held-out predictions | PENDING | raw JSONL with prompt and decoding-contract hashes |
 | Full MLA-only adapter | PENDING | H200 training checkpoint and run evidence |
 | Full MLA+`lm_head` adapter | PENDING | run only if the MLA-only result does not close the quality gate |
@@ -45,9 +45,10 @@ responses and stamps every row with the common runtime-manifest hash.
 The trainer launch independently pins Megatron Bridge at `d0c6228a` and scans
 all local safetensors headers before starting workers. That revision performs
 lazy per-tensor reads, but the read happens before TP/ETP scatter; the recorded
-4.871 TiB figure is logical aggregate traffic and deliberately assumes no page
-cache. This proves bounded source-tensor memory, not storage throughput or a
-successful full-model load.
+4.802 TiB figure is logical aggregate traffic for the MTP-disabled policy and
+deliberately assumes no page cache. Including the unused MTP layer raises the
+upper bound to 4.871 TiB. This proves bounded source-tensor memory, not storage
+throughput or a successful full-model load.
 
 Generate base and adapter validation rows against the same live server
 instance. Both the blinded-review tool and the comparator verify that common

@@ -566,17 +566,20 @@ Before `torchrun`, every node also runs `audit_full_checkpoint_loading.py`.
 It reads only the 7.12 MiB of safetensors JSON headers, never tensor payloads,
 and requires the exact 282-shard index. The pinned checkpoint contains 58,368
 separate routed-expert tensors: each expert projection is 24 MiB rather than a
-single stacked terabyte-scale tensor. The largest source tensor is the 1.773
-GiB embedding or language-model head; a 5.0 GiB shard is not materialized as
-one tensor.
+single stacked terabyte-scale tensor. Of those, 768 belong to the disabled MTP
+layer 78, leaving 57,600 expert tensors in the policy import. The largest
+source tensor is the 1.773 GiB embedding or language-model head; a 5.0 GiB
+shard is not materialized as one tensor.
 
 At TP8/EP32/ETP1/PP1, the pinned Bridge importer reads HF tensors before its
 rank-local TP/ETP scatter. The conservative logical traffic is therefore
-`35.186 GiB non-expert × 64 + 1,368 GiB expert × 2 = 4.871 TiB` across the
-job, or 77.936 GiB per rank on average. Shared filesystem page cache may lower
-physical backing-store traffic, but the launch gate does not assume it. Each
-node writes its own `full-hf-load-audit-nodeN.json`; use those files to separate
-slow streaming from a deadlock during the first full qualification.
+active MTP-disabled import is `34.648 GiB non-expert × 64 + 1,350 GiB expert ×
+2 = 4.802 TiB` across the job, or 76.835 GiB per rank on average. Scanning the
+otherwise unused MTP layer gives a 4.871 TiB whole-checkpoint upper bound.
+Shared filesystem page cache may lower physical backing-store traffic, but the
+launch gate does not assume it. Each node writes its own
+`full-hf-load-audit-nodeN.json`; use those files to separate slow streaming
+from a deadlock during the first full qualification.
 
 The production candidate consumes all three locked train buckets in one
 optimizer stream and all three disjoint validation buckets at the final step.

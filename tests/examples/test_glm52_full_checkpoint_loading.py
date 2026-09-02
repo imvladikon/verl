@@ -13,7 +13,10 @@ from audit_full_checkpoint_loading import audit_checkpoint  # noqa: E402
 
 
 def write_checkpoint(root: Path) -> None:
-    config = {"architectures": ["GlmMoeDsaForCausalLM"]}
+    config = {
+        "architectures": ["GlmMoeDsaForCausalLM"],
+        "num_hidden_layers": 2,
+    }
     config_path = root / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
@@ -80,6 +83,9 @@ def test_audit_measures_expert_and_dense_read_amplification(tmp_path: Path) -> N
     assert result["checkpoint"]["nonexpert_bytes"] == 24
     assert result["checkpoint"]["dtype_counts"] == {"BF16": 4, "F32": 1}
     assert result["checkpoint"]["dtype_bytes"] == {"BF16": 40, "F32": 8}
+    assert result["checkpoint"]["auxiliary_tensor_count"] == 0
+    assert result["policy_import"]["tensor_count"] == 5
+    assert result["policy_import"]["payload_bytes"] == 48
     assert result["source_working_set"]["largest_tensor_bytes"] == 16
     assert result["source_working_set"]["largest_gate_up_bundle_bytes"] == 16
     assert result["bridge_import"]["nonexpert_read_factor"] == 4
@@ -106,6 +112,34 @@ def test_audit_rejects_header_index_disagreement(tmp_path: Path) -> None:
             official_glm52=False,
             bridge_revision="test",
         )
+
+
+def test_audit_excludes_disabled_mtp_layer_from_policy_reads(tmp_path: Path) -> None:
+    write_checkpoint(tmp_path)
+    config_path = tmp_path / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["num_hidden_layers"] = 1
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = audit_checkpoint(
+        tmp_path,
+        world_size=4,
+        tp=2,
+        ep=2,
+        etp=1,
+        pp=1,
+        cp=1,
+        official_glm52=False,
+        bridge_revision="test",
+    )
+
+    assert result["checkpoint"]["auxiliary_tensor_count"] == 4
+    assert result["checkpoint"]["auxiliary_bytes"] == 32
+    assert result["policy_import"]["tensor_count"] == 1
+    assert result["policy_import"]["payload_bytes"] == 16
+    assert result["policy_import"]["expert_tensor_count"] == 0
+    assert result["bridge_import"]["logical_total_read_bytes"] == 64
+    assert result["bridge_import"]["whole_checkpoint_upper_bound_bytes"] == 144
 
 
 def test_synthetic_config_hash_is_stable(tmp_path: Path) -> None:
