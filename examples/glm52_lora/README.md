@@ -91,6 +91,10 @@ engineering fixture, while only the pinned full `zai-org/GLM-5.2` checkpoint
 can support a Russian/Markdown/accidental-Han quality claim. Public 0.8B test
 and DSpark draft checkpoints are not quality proxies.
 
+The production trainer choice, independent full-model evidence, exact LoRA
+parameter counts, and AutoModel/Bridge/Slime/Axolotl tradeoffs are recorded in
+[`LORA_FRAMEWORKS.md`](LORA_FRAMEWORKS.md).
+
 The six-row smoke files above prove integration only. They are not a Russian
 quality corpus. Curated full-model data uses the schema demonstrated by
 `quality_dataset.example.jsonl` and is validated before conversion:
@@ -218,6 +222,23 @@ build was byte-identical, including every train Parquet. The builder rejects
 source/tokenizer hash drift, duplicate IDs or prompts, unaccepted rows, empty
 buckets, and any sequence above the largest bucket. The three matching
 full-model configs all validate as `CONFIG-PASS/RUNTIME-PENDING`.
+
+Before spending a full-model allocation, run the exact three-file input as one
+optimizer stream on the surgery checkpoint:
+
+```bash
+MIXTURE_DIR=/path/to/quality-mixture-targeted-wikipedia-2728 \
+GPU_ID=5 \
+examples/glm52_lora/run_surgery_sft_locked_mixture_megatron.sh
+```
+
+This performs 33 optimizer updates, matching one full-model epoch's update
+count at global batch 64. The one-GPU surgery gate deliberately uses batch
+size one, so it proves mixed-length input handling and optimizer stability,
+not full-batch numerical parity or language quality. A single concatenated
+dataset keeps one optimizer; chaining three adapter-only jobs would reset the
+optimizer, while ordinary checkpoint resume would incorrectly restore the
+previous bucket's dataloader state.
 
 Measure the generated rows with the exact checkpoint tokenizer and chat
 template before choosing a sequence length:
