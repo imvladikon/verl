@@ -46,6 +46,38 @@ evaluated independently as a diagnostic, but a quality adapter must combine
 it with accepted human-reviewed general-Russian rows and preserve separate
 held-out results for each failure family.
 
+## Teacher-free authentic Russian corruption set
+
+`sample_wikipedia_ru.py` streams
+[`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) at
+revision `b04c8d1ceb2f5cd4588862100d08de323dccfbaa`, configuration
+`20231101.ru`. The Hub card reports CC-BY-SA-3.0 and GFDL. The sampler records
+the exact article ID, title, URL, source-text SHA-256, dataset revision and
+license; it never stores a full article.
+
+`build_teacher_free_russian_corruptions.py` creates four deterministic targets
+per accepted article: accidental-Han removal, Cyrillic/Latin confusable repair,
+case-and-period repair, and exact Markdown heading/list rendering. It rejects
+Han, Markdown metacharacters, URLs, unmatched quotes or parentheses, malformed
+empty punctuation such as `"(, род. )"`, low-Cyrillic sentences, and duplicate
+prompts. No model generates or rewrites the target.
+
+The bounded 2026-09-02 engineering audit selected 64 articles after reading 96
+streamed rows and retained 61 groups after prompt deduplication: 244 examples,
+61 per family. The source sample SHA-256 is
+`d7027cb0a69dc6ca6786f8de56fa7f37b73476532f692f174974bb967677de48`;
+the final attributed rows SHA-256 is
+`871ddc86906d51edc6362fd83ce70338773c7543b6c74f5cb93fc942e576ac74`.
+Two independent builds from the same materialized sample were byte-identical,
+including Parquet output. Exact GLM-5.2 surgery-tokenizer full-chat lengths were
+p50 170, p95 472, p99 546, maximum 556. Markdown rows therefore belong in a
+640-token no-truncation bucket, not the 256-token smoke bucket.
+
+The generated `ATTRIBUTION.jsonl` and `NOTICE.md` must travel with the derived
+artifact. This is a data-engineering pass, not blanket approval of every
+Wikipedia sentence: license/distribution and sampled-content review remain
+explicit production gates.
+
 ## Excluded from the first mixture
 
 - [IlyaGusev/ru_turbo_alpaca](https://huggingface.co/datasets/IlyaGusev/ru_turbo_alpaca):

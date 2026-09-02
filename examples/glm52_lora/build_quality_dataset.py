@@ -110,6 +110,7 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if review_method not in {
             "human",
             "source-human-ratings",
+            "deterministic-corruption-audit",
             "deterministic-template-audit",
             "schema-fixture",
         }:
@@ -128,6 +129,15 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             value = provenance.get(field)
             if not isinstance(value, str) or not value.strip():
                 raise TypeError(f"{example_id}: provenance.{field} must be a nonempty string")
+
+        normalized_provenance = {field: provenance[field].strip() for field in required_provenance}
+        for field in ("source_url", "source_title", "source_text_sha256"):
+            if field not in provenance:
+                continue
+            value = provenance[field]
+            if not isinstance(value, str) or not value.strip():
+                raise TypeError(f"{example_id}: provenance.{field} must be a nonempty string")
+            normalized_provenance[field] = value.strip()
 
         validated.append(
             {
@@ -151,7 +161,7 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "notes": review_notes,
                     "method": review_method,
                 },
-                "provenance": {field: provenance[field].strip() for field in required_provenance},
+                "provenance": normalized_provenance,
                 "prompt_sha256": digest,
             }
         )

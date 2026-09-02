@@ -120,6 +120,42 @@ and 32 intentional-Chinese retention controls. Semantic groups, not prompt
 wordings, determine the 540/90/90 train/validation/test split. This set targets
 specific behavior; it is not a substitute for reviewed general-Russian data.
 
+Build a second teacher-free set from authentic Russian prose without a model
+teacher. The sampler locks the dataset revision, keeps source URLs and text
+hashes, and materializes only three accepted sentences per article:
+
+```bash
+python examples/glm52_lora/sample_wikipedia_ru.py \
+  runs/glm52-wikipedia/source_sample.jsonl \
+  --max-articles 512 --max-source-rows 20000
+python examples/glm52_lora/build_teacher_free_russian_corruptions.py \
+  runs/glm52-wikipedia/source_sample.jsonl \
+  runs/glm52-wikipedia/artifacts
+python examples/glm52_lora/audit_quality_tokens.py \
+  runs/glm52-wikipedia/artifacts/teacher_free_rows.jsonl \
+  /path/to/immutable/GLM-5.2-tokenizer \
+  --output runs/glm52-wikipedia/artifacts/token_audit.json
+```
+
+The pinned 64-article engineering sample produced 244 rows from 61 unique
+articles after removing three duplicate-prompt groups. Its exact surgery
+tokenizer audit measured full-chat p95 472, p99 546, and maximum 556 tokens.
+Use the dedicated no-truncation bucket instead of the old 256-token smoke
+profile:
+
+```bash
+GPU_ID=5 \
+MODEL_PATH=/path/to/immutable/GLM-5.2-9B-LoRA-Surgery-Dummy \
+TRAIN_FILE=runs/glm52-wikipedia/artifacts/sft_train.parquet \
+MAX_LENGTH=640 REQUIRED_MAX_TOKENS=556 \
+examples/glm52_lora/run_surgery_sft_teacher_free_megatron.sh
+```
+
+Re-run the token audit for every larger materialization and set
+`REQUIRED_MAX_TOKENS` to its measured maximum. The generated `NOTICE.md` and
+`ATTRIBUTION.jsonl` are part of the artifact; production use remains gated on
+license and content review.
+
 Measure the generated rows with the exact checkpoint tokenizer and chat
 template before choosing a sequence length:
 
@@ -202,6 +238,22 @@ VAL_FILE=/path/to/sft_validation.parquet \
 examples/glm52_lora/run_full_sft_megatron.sh > resolved.yaml
 
 python examples/glm52_lora/verify_full_sft_config.py resolved.yaml
+```
+
+For the pinned authentic-Russian sample, keep the same fail-closed full-model
+profile but replace the dataset locks and audited sequence bound:
+
+```bash
+CONFIG_ONLY=1 MAX_LENGTH=640 REQUIRED_MAX_TOKENS=556 \
+EXPECTED_TRAIN_SHA256=534170e62865ebbab0e65439ad8c60785dc242b6c3a56c8c9ad9e19afaf9971b \
+EXPECTED_VAL_SHA256=14041be9480c77edb7e14019b32e2caf76e065323cec83ea6deca02fa597620c \
+MODEL_PATH=/path/to/config-only-snapshot \
+TRAIN_FILE=/path/to/wikipedia/sft_train.parquet \
+VAL_FILE=/path/to/wikipedia/sft_validation.parquet \
+examples/glm52_lora/run_full_sft_megatron.sh > resolved-wikipedia.yaml
+
+python examples/glm52_lora/verify_full_sft_config.py \
+  resolved-wikipedia.yaml --expected-max-length 640
 ```
 
 The validator reports `CONFIG-PASS/RUNTIME-PENDING`; this is not a claim that

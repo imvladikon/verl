@@ -26,6 +26,7 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("resolved_config", type=Path)
+    parser.add_argument("--expected-max-length", type=int, default=256)
     args = parser.parse_args()
     config = yaml.safe_load(args.resolved_config.read_text(encoding="utf-8"))
 
@@ -73,7 +74,8 @@ def main() -> None:
     require(data["train_batch_size"] == 64, "global batch drift")
     require(data["micro_batch_size_per_gpu"] == 1, "micro batch drift")
     require(
-        data["max_length"] == 256 and data["max_token_len_per_gpu"] == 256,
+        data["max_length"] == args.expected_max_length
+        and data["max_token_len_per_gpu"] == args.expected_max_length,
         "sequence length drift",
     )
     require(data["truncation"] == "error", "truncation must fail closed")
@@ -107,6 +109,7 @@ def main() -> None:
             "cp": 1,
         },
         "trainable_parameters": trainable,
+        "max_length": args.expected_max_length,
         "bf16_adapter_mib": round(trainable * 2 / 2**20, 3),
         "unsharded_16_byte_bundle_gib": round(trainable * 16 / 2**30, 3),
         "full_model_runtime": None,

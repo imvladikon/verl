@@ -17,6 +17,8 @@ run_dir=${RUN_DIR:-${repo_root}/runs/glm52-full-quality-sft-megatron}
 rank=${LORA_RANK:-16}
 alpha=${LORA_ALPHA:-32}
 steps=${STEPS:-8}
+max_length=${MAX_LENGTH:-256}
+required_max_tokens=${REQUIRED_MAX_TOKENS:-187}
 nnodes=${NNODES:-8}
 gpus_per_node=${GPUS_PER_NODE:-8}
 node_rank=${NODE_RANK:-0}
@@ -26,17 +28,23 @@ config_only=${CONFIG_ONLY:-0}
 
 expected_model_revision=cf457fa734ab149ffef225f80893eb38c6ff5cdc
 expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a
-expected_train_sha256=c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c
-expected_val_sha256=df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87
-
-source "${repo_root}/examples/glm52_lora/stack_env.sh"
+expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
+expected_val_sha256=${EXPECTED_VAL_SHA256:-df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87}
 
 if (( rank != 16 || alpha != 32 )); then
   echo "full-model qualification is locked to rank 16 / alpha 32" >&2
   exit 2
 fi
 if (( steps < 2 || steps > 8 )); then
-  echo "STEPS must be in [2,8] so the 540-row train split is not repeated" >&2
+  echo "STEPS must stay in the bounded qualification range [2,8]" >&2
+  exit 2
+fi
+if [[ ! "${max_length}" =~ ^[0-9]+$ ]] || [[ ! "${required_max_tokens}" =~ ^[0-9]+$ ]]; then
+  echo "MAX_LENGTH and REQUIRED_MAX_TOKENS must be positive integers" >&2
+  exit 2
+fi
+if (( max_length < required_max_tokens )); then
+  echo "MAX_LENGTH=${max_length} truncates the audited ${required_max_tokens}-token example" >&2
   exit 2
 fi
 if (( nnodes != 8 || gpus_per_node != 8 || nnodes * gpus_per_node != 64 )); then
@@ -108,6 +116,8 @@ if [[ "${config_only}" != 1 ]]; then
   done
 fi
 
+source "${repo_root}/examples/glm52_lora/stack_env.sh"
+
 mkdir -p "${run_dir}"
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TOKENIZERS_PARALLELISM=false
@@ -121,8 +131,8 @@ job_args=(
   "data.val_files=${val_file}"
   data.train_batch_size=64
   data.micro_batch_size_per_gpu=1
-  data.max_length=256
-  data.max_token_len_per_gpu=256
+  "data.max_length=${max_length}"
+  "data.max_token_len_per_gpu=${max_length}"
   data.use_dynamic_bsz=false
   data.pad_mode=no_padding
   data.truncation=error
