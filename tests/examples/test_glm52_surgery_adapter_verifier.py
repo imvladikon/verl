@@ -78,3 +78,40 @@ def test_verifier_rejects_an_unchanged_lora_b_tensor(tmp_path: Path) -> None:
         assert "LoRA-B tensors changed" in str(error)
     else:  # pragma: no cover
         raise AssertionError("zero LoRA-B tensor was not rejected")
+
+
+def test_verifier_accepts_ppo_actor_checkpoint_layout(tmp_path: Path) -> None:
+    rank = 1
+    actor_dir = tmp_path / "global_step_2" / "actor"
+    adapter_dir = actor_dir / "model" / "huggingface" / "adapter"
+    adapter_dir.mkdir(parents=True)
+    tensors = {}
+    for target, (a_shape, b_shape) in TARGET_SHAPES.items():
+        prefix = f"base_model.model.model.layers.0.self_attn.{target}"
+        tensors[f"{prefix}.lora_A.default.weight"] = torch.ones(
+            _shape(a_shape, rank), dtype=torch.bfloat16
+        )
+        tensors[f"{prefix}.lora_B.default.weight"] = torch.ones(
+            _shape(b_shape, rank), dtype=torch.bfloat16
+        )
+    save_file(tensors, adapter_dir / "adapter_model.safetensors")
+    (adapter_dir / "adapter_config.json").write_text(
+        json.dumps(
+            {
+                "r": rank,
+                "lora_alpha": 2,
+                "target_modules": sorted(TARGET_SHAPES),
+            }
+        )
+    )
+    (actor_dir / "ckpt_contents.json").write_text(
+        json.dumps({"role": "actor", "backend": {"peft": True}})
+    )
+    (actor_dir / "transformer_config.json").write_text("{}")
+    dist_dir = actor_dir / "model" / "dist_ckpt"
+    dist_dir.mkdir()
+    (dist_dir / "metadata.json").write_text("{}")
+
+    result = verify(actor_dir, layers=1, rank=rank, alpha=2)
+    assert result["checkpoint_kind"] == "ppo_actor"
+    assert result["all_lora_b_nonzero"] is True

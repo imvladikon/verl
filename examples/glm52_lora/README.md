@@ -46,6 +46,13 @@ same ten donor layers and the same 16 experts in every retained MoE layer.
    examples/glm52_lora/run_surgery_grpo_megatron_sglang.sh
    ```
 
+5. Verify the final PPO actor adapter and its Megatron dist checkpoint:
+
+   ```bash
+   python examples/glm52_lora/verify_surgery_adapter.py \
+     runs/glm52-lora-surgery-grpo-megatron-sglang/global_step_2/actor
+   ```
+
 The first profile adapts only the five MLA projections. `lm_head`, the DSA
 indexer, shared experts, and routed experts are separate ablations after the
 MLA-only save/reload, sharding, hot-sync, and finite-gradient gates pass.

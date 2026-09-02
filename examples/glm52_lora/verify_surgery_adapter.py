@@ -38,17 +38,30 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def resolve_paths(path: Path) -> tuple[Path, Path | None]:
+def resolve_paths(path: Path) -> tuple[Path, Path | None, str]:
     if (path / "adapter_config.json").is_file():
-        return path, None
+        return path, None, "adapter"
     adapter = path / "model" / "huggingface" / "adapter"
     if not (adapter / "adapter_config.json").is_file():
         raise FileNotFoundError(f"HF adapter not found below checkpoint: {path}")
-    return adapter, path
+    if (path / "lora_train_meta.json").is_file():
+        checkpoint_kind = "sft"
+    elif (path / "ckpt_contents.json").is_file() and (
+        path / "transformer_config.json"
+    ).is_file():
+        contents = json.loads((path / "ckpt_contents.json").read_text())
+        if contents.get("role") != "actor" or not contents.get("backend", {}).get(
+            "peft"
+        ):
+            raise AssertionError("checkpoint is not a PEFT PPO actor")
+        checkpoint_kind = "ppo_actor"
+    else:
+        raise FileNotFoundError(f"unrecognized adapter checkpoint layout: {path}")
+    return adapter, path, checkpoint_kind
 
 
 def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
-    adapter_dir, checkpoint_root = resolve_paths(path)
+    adapter_dir, checkpoint_root, checkpoint_kind = resolve_paths(path)
     config = json.loads((adapter_dir / "adapter_config.json").read_text())
     if int(config.get("r", -1)) != rank:
         raise AssertionError(f"adapter rank mismatch: {config.get('r')} != {rank}")
@@ -111,15 +124,20 @@ def verify(path: Path, *, layers: int, rank: int, alpha: int) -> dict:
         )
 
     if checkpoint_root is not None:
-        meta = json.loads((checkpoint_root / "lora_train_meta.json").read_text())
-        if int(meta.get("r", -1)) != rank or int(meta.get("lora_alpha", -1)) != alpha:
-            raise AssertionError(f"checkpoint LoRA metadata mismatch: {meta}")
+        meta_path = checkpoint_root / "lora_train_meta.json"
+        if meta_path.is_file():
+            meta = json.loads(meta_path.read_text())
+            if int(meta.get("r", -1)) != rank or int(
+                meta.get("lora_alpha", -1)
+            ) != alpha:
+                raise AssertionError(f"checkpoint LoRA metadata mismatch: {meta}")
         dist_dir = checkpoint_root / "model" / "dist_ckpt"
         if not dist_dir.is_dir() or not any(dist_dir.iterdir()):
             raise AssertionError("Megatron adapter dist checkpoint is missing")
 
     return {
         "adapter_dir": str(adapter_dir.resolve()),
+        "checkpoint_kind": checkpoint_kind,
         "layers": layers,
         "targets_per_layer": len(TARGET_SHAPES),
         "tensor_count": len(observed),
