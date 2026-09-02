@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # One-GPU MLA-LoRA SFT gate for the authentic Russian corruption corpus.  The
-# Markdown family is deliberately kept in a separate, longer sequence bucket:
-# the pinned 64-article audit has a 556-token maximum, so seq=256 would truncate
-# valid targets and invalidate both the loss and the memory measurement.
+# Markdown is deliberately kept in a separate, longer sequence bucket. The
+# defaults reproduce the pinned 64-article audit; larger materializations must
+# pass their measured maximum through REQUIRED_MAX_TOKENS and choose the next
+# safe sequence length rather than truncating valid targets.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "${script_dir}/../.." && pwd)

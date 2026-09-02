@@ -78,6 +78,16 @@ artifact. This is a data-engineering pass, not blanket approval of every
 Wikipedia sentence: license/distribution and sampled-content review remain
 explicit production gates.
 
+The default 512-article audit read 817 streamed rows, accepted 502 unique
+article groups after removing ten duplicate-prompt groups, and produced 2,008
+examples split 1,588/244/176. Source-sample and final-row SHA-256 are
+`39ee6e5e2181c1bce36fa022a037ec54613ecd5a75258fc22a7d03485bba96cd`
+and `5841e7a00dd6109269d9a04d92ccfad26b207ab82b6570b17371b6d04f9a0078`.
+The deterministic correction bucket contains 1,506 rows with exact-tokenizer
+maximum 357; the 502-row Markdown bucket has maximum 706. Their recommended
+no-truncation sequence lengths are 384 and 768 respectively. Both bucket
+builds were reproduced byte-for-byte from the same source sample.
+
 ## Excluded from the first mixture
 
 - [IlyaGusev/ru_turbo_alpaca](https://huggingface.co/datasets/IlyaGusev/ru_turbo_alpaca):

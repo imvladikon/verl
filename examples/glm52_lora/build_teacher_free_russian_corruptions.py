@@ -263,6 +263,46 @@ def read_articles(path: Path) -> list[dict[str, Any]]:
     return articles
 
 
+def split_sequence_buckets(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    buckets = {
+        "corrections": [row for row in rows if not row["contract"]["require_markdown"]],
+        "markdown": [row for row in rows if row["contract"]["require_markdown"]],
+    }
+    if any(not bucket_rows for bucket_rows in buckets.values()):
+        raise ValueError("both correction and Markdown sequence buckets must be nonempty")
+    if sum(len(bucket_rows) for bucket_rows in buckets.values()) != len(rows):
+        raise AssertionError("sequence bucket partition lost rows")
+    return buckets
+
+
+def write_sequence_buckets(rows: list[dict[str, Any]], output_dir: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name, bucket_rows in split_sequence_buckets(rows).items():
+        bucket_dir = output_dir / name
+        bucket_dir.mkdir(parents=True, exist_ok=True)
+        rows_path = bucket_dir / "rows.jsonl"
+        rows_path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in bucket_rows)
+        )
+        bucket_manifest = write_artifacts(bucket_rows, bucket_dir)
+        bucket_manifest.update(
+            {
+                "bucket": name,
+                "rows_sha256": sha256(rows_path),
+                "token_audit_required": True,
+            }
+        )
+        (bucket_dir / "manifest.json").write_text(
+            json.dumps(bucket_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+        result[name] = {
+            "rows": len(bucket_rows),
+            "counts": bucket_manifest["counts"],
+            "rows_sha256": bucket_manifest["rows_sha256"],
+        }
+    return result
+
+
 def write_attribution(articles: list[dict[str, Any]], rows: list[dict[str, Any]], output_dir: Path) -> Path:
     accepted_ids = {
         row["provenance"]["source_record_id"].split(":", 1)[0]
@@ -317,6 +357,7 @@ def main() -> None:
     rows_path.write_text("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows))
     attribution_path = write_attribution(articles, rows, args.output_dir)
     manifest = write_artifacts(rows, args.output_dir)
+    sequence_buckets = write_sequence_buckets(rows, args.output_dir)
     manifest.update(
         {
             "dataset_revision": DATASET_REVISION,
@@ -326,6 +367,7 @@ def main() -> None:
             "source_sample_sha256": sha256(args.source_jsonl),
             "rows_sha256": sha256(rows_path),
             "attribution_sha256": sha256(attribution_path),
+            "sequence_buckets": sequence_buckets,
             "family_counts": dict(
                 sorted(
                     Counter(

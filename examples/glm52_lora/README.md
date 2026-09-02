@@ -156,6 +156,39 @@ Re-run the token audit for every larger materialization and set
 `ATTRIBUTION.jsonl` are part of the artifact; production use remains gated on
 license and content review.
 
+The default 512-article materialization was also audited independently. It
+accepted 502 article groups and emitted 2,008 rows (1,588/244/176 by split).
+The builder writes two disjoint sequence buckets automatically:
+
+- `corrections/`: 1,506 rows, full-chat maximum 357; qualify with `seq=384`;
+- `markdown/`: 502 rows, full-chat maximum 706; qualify with `seq=768`.
+
+For example, run the buckets separately so short correction examples do not
+pay the Markdown activation-memory cost:
+
+```bash
+TRAIN_FILE=runs/glm52-wikipedia/artifacts/corrections/sft_train.parquet \
+MAX_LENGTH=384 REQUIRED_MAX_TOKENS=357 GPU_ID=5 MODEL_PATH=/path/to/model \
+examples/glm52_lora/run_surgery_sft_teacher_free_megatron.sh
+
+TRAIN_FILE=runs/glm52-wikipedia/artifacts/markdown/sft_train.parquet \
+MAX_LENGTH=768 REQUIRED_MAX_TOKENS=706 GPU_ID=5 MODEL_PATH=/path/to/model \
+examples/glm52_lora/run_surgery_sft_teacher_free_megatron.sh
+```
+
+The buckets preserve article-level splits and attribution. Audit both bucket
+JSONL files after every rematerialization; the 357/706 bounds belong only to
+the pinned 512-article candidate.
+
+Both bucket profiles passed two steps on the 9B surgery checkpoint. The
+384-token correction run measured loss `15.461869 -> 13.652021`, gradient norm
+`261.420868 -> 30.508768`, and peak CUDA allocated/reserved
+`17.934/18.223 GiB`. The 768-token Markdown run measured loss
+`15.846344 -> 13.241395`, gradient norm `263.868103 -> 21.209194`, and peak
+CUDA allocated/reserved `20.328/21.117 GiB`. Each exported 100 finite adapter
+tensors with all 50 LoRA-B tensors nonzero. Matching full-model TP8/EP32
+profiles resolve as `CONFIG-PASS/RUNTIME-PENDING` at both sequence lengths.
+
 Measure the generated rows with the exact checkpoint tokenizer and chat
 template before choosing a sequence length:
 

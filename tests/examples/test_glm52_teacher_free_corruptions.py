@@ -14,6 +14,7 @@ from build_teacher_free_russian_corruptions import (  # noqa: E402
     SOURCE_REVISION,
     article_sentences,
     generate_rows,
+    split_sequence_buckets,
 )
 
 SENTENCES = [
@@ -63,6 +64,9 @@ def test_teacher_free_corruptions_are_deterministic_and_valid() -> None:
     assert any(row["contract"]["require_markdown"] for row in first)
     assert all(row["provenance"]["source_url"].startswith("https://ru.wikipedia.org/") for row in first)
     assert all(row["provenance"]["source_text_sha256"] == "0" * 64 for row in first)
+    buckets = split_sequence_buckets(validated)
+    assert len(buckets["corrections"]) == 3
+    assert len(buckets["markdown"]) == 1
 
 
 def test_source_revision_drift_is_rejected() -> None:
