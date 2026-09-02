@@ -19,6 +19,7 @@ alpha=${LORA_ALPHA:-32}
 steps=${STEPS:-8}
 max_length=${MAX_LENGTH:-256}
 required_max_tokens=${REQUIRED_MAX_TOKENS:-187}
+qualification_profile=${QUALIFICATION_PROFILE:-bounded}
 nnodes=${NNODES:-8}
 gpus_per_node=${GPUS_PER_NODE:-8}
 node_rank=${NODE_RANK:-0}
@@ -31,18 +32,36 @@ expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb5457
 expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
 expected_val_sha256=${EXPECTED_VAL_SHA256:-df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87}
 
+for integer_setting in rank alpha steps max_length required_max_tokens nnodes gpus_per_node node_rank master_port; do
+  integer_value=${!integer_setting}
+  if [[ ! "${integer_value}" =~ ^[0-9]+$ ]]; then
+    echo "${integer_setting} must be a non-negative integer, got: ${integer_value}" >&2
+    exit 2
+  fi
+done
+
 if (( rank != 16 || alpha != 32 )); then
   echo "full-model qualification is locked to rank 16 / alpha 32" >&2
   exit 2
 fi
-if (( steps < 2 || steps > 8 )); then
-  echo "STEPS must stay in the bounded qualification range [2,8]" >&2
-  exit 2
-fi
-if [[ ! "${max_length}" =~ ^[0-9]+$ ]] || [[ ! "${required_max_tokens}" =~ ^[0-9]+$ ]]; then
-  echo "MAX_LENGTH and REQUIRED_MAX_TOKENS must be positive integers" >&2
-  exit 2
-fi
+case "${qualification_profile}" in
+  bounded)
+    if (( steps < 2 || steps > 8 )); then
+      echo "STEPS must stay in the bounded qualification range [2,8]" >&2
+      exit 2
+    fi
+    ;;
+  locked-quality-mixture-2728)
+    if (( steps != 33 || max_length != 768 || required_max_tokens != 706 )); then
+      echo "locked-quality-mixture-2728 requires STEPS=33, MAX_LENGTH=768, REQUIRED_MAX_TOKENS=706" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "unknown QUALIFICATION_PROFILE: ${qualification_profile}" >&2
+    exit 2
+    ;;
+esac
 if (( max_length < required_max_tokens )); then
   echo "MAX_LENGTH=${max_length} truncates the audited ${required_max_tokens}-token example" >&2
   exit 2

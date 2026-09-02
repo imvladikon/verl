@@ -355,6 +355,28 @@ the 753B checkpoint has trained. A real launch additionally requires the exact
 snapshot sentinel, eight exclusive H200s on every node, an explicit operator
 acknowledgement, and the SHA-256 from a prior TP2 adapter save/reload gate.
 
+The production candidate consumes all three locked train buckets in one
+optimizer stream and all three disjoint validation buckets at the final step.
+The three test buckets are hash-locked but never used for training or model
+selection:
+
+```bash
+CONFIG_ONLY=1 \
+MODEL_PATH=/path/to/config-only-snapshot \
+MIXTURE_DIR=/path/to/quality-mixture-targeted-wikipedia-2728 \
+examples/glm52_lora/run_full_sft_locked_mixture_megatron.sh \
+  > resolved-locked-mixture.yaml
+
+python examples/glm52_lora/verify_full_sft_config.py \
+  resolved-locked-mixture.yaml \
+  --expected-max-length 768 --expected-steps 33 \
+  --expected-train-file-count 3 --expected-val-file-count 3
+```
+
+This wrapper remains fail-closed on the same explicit 64-H200 acknowledgement
+and prior TP2 adapter save/reload SHA. `CONFIG-PASS/RUNTIME-PENDING` is not
+permission or evidence for a full-model launch.
+
 Keep activation recomputation disabled for this short-sequence BSHD profile.
 An empirical 9B run with uniform one-layer full recomputation failed because
 backward recomputed DSA skip layer 10 before source layer 7 and the cross-layer

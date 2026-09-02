@@ -27,6 +27,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("resolved_config", type=Path)
     parser.add_argument("--expected-max-length", type=int, default=256)
+    parser.add_argument("--expected-steps", type=int)
+    parser.add_argument("--expected-train-file-count", type=int, default=1)
+    parser.add_argument("--expected-val-file-count", type=int, default=1)
     args = parser.parse_args()
     config = yaml.safe_load(args.resolved_config.read_text(encoding="utf-8"))
 
@@ -37,6 +40,7 @@ def main() -> None:
     require(config["model"]["lora"]["rank"] == 16, "rank drift")
     require(config["model"]["lora"]["alpha"] == 32, "alpha drift")
     require(config["model"]["lora"]["merge"] is False, "adapter merge enabled")
+    require(config["model"]["mtp"]["enable"] is False, "MTP must remain disabled")
     require(
         config["model"]["use_remove_padding"] is False,
         "expected source-qualified BSHD path",
@@ -74,8 +78,7 @@ def main() -> None:
     require(data["train_batch_size"] == 64, "global batch drift")
     require(data["micro_batch_size_per_gpu"] == 1, "micro batch drift")
     require(
-        data["max_length"] == args.expected_max_length
-        and data["max_token_len_per_gpu"] == args.expected_max_length,
+        data["max_length"] == args.expected_max_length and data["max_token_len_per_gpu"] == args.expected_max_length,
         "sequence length drift",
     )
     require(data["truncation"] == "error", "truncation must fail closed")
@@ -83,13 +86,27 @@ def main() -> None:
         data["tokenize_full_conversation"] is True,
         "GLM full-chat tokenization disabled",
     )
+    require(
+        len(data["train_files"]) == args.expected_train_file_count,
+        "train-file count drift",
+    )
+    require(
+        len(data["val_files"]) == args.expected_val_file_count,
+        "validation-file count drift",
+    )
 
     trainer = config["trainer"]
     require(
         trainer["nnodes"] == 8 and trainer["n_gpus_per_node"] == 8,
         "64-GPU topology drift",
     )
-    require(2 <= trainer["total_training_steps"] <= 8, "step bound drift")
+    if args.expected_steps is None:
+        require(2 <= trainer["total_training_steps"] <= 8, "step bound drift")
+    else:
+        require(
+            trainer["total_training_steps"] == args.expected_steps,
+            "step count drift",
+        )
     require(
         config["checkpoint"]["save_lora_only"] is True,
         "full-model checkpoint export enabled",
@@ -105,10 +122,12 @@ def main() -> None:
             "tp": 8,
             "ep": 32,
             "dp": 8,
+            "expert_dp": 2,
             "pp": 1,
             "cp": 1,
         },
         "trainable_parameters": trainable,
+        "training_steps": trainer["total_training_steps"],
         "max_length": args.expected_max_length,
         "bf16_adapter_mib": round(trainable * 2 / 2**20, 3),
         "unsharded_16_byte_bundle_gib": round(trainable * 16 / 2**30, 3),
