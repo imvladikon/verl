@@ -392,7 +392,8 @@ class ServerAdapter(BaseRollout):
             else:
                 weights = weights
 
-            model_type = getattr(self.model_config.hf_config, "model_type", None)
+            hf_config = getattr(self.model_config, "hf_config", None)
+            model_type = getattr(hf_config, "model_type", None)
             if model_type == "deepseek_v4":
                 fusion_groups = DEEPSEEK_V4_FUSION_GROUPS
             elif model_type == "glm_moe_dsa":
