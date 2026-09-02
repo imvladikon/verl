@@ -88,6 +88,14 @@ maximum 357; the 502-row Markdown bucket has maximum 706. Their recommended
 no-truncation sequence lengths are 384 and 768 respectively. Both bucket
 builds were reproduced byte-for-byte from the same source sample.
 
+The locked ASAP mixture combines this 2,008-row artifact with the 720-row
+`targeted-template-v1` artifact; it does not include the pending Aya/OASST1
+review queue. Exact full-chat tokenization assigns 2,184 rows to `seq256`, 259
+to `seq384`, and 285 to `seq768`, with no truncation. Mixture SHA-256 is
+`094a0385dcc27d647b92d2d4d40ad4ec7ae1bbeab8de878915efaed88bc824e7`.
+Both input JSONL hashes and both tokenizer-file hashes are mandatory arguments,
+and the builder fails closed on any unaccepted row or oversized sequence.
+
 ## Excluded from the first mixture
 
 - [IlyaGusev/ru_turbo_alpaca](https://huggingface.co/datasets/IlyaGusev/ru_turbo_alpaca):

@@ -189,6 +189,30 @@ CUDA allocated/reserved `20.328/21.117 GiB`. Each exported 100 finite adapter
 tensors with all 50 LoRA-B tensors nonzero. Matching full-model TP8/EP32
 profiles resolve as `CONFIG-PASS/RUNTIME-PENDING` at both sequence lengths.
 
+Build the locked ASAP mixture from the 720 project-authored rows and the 2,008
+authentic-text rows with the exact surgery tokenizer:
+
+```bash
+python examples/glm52_lora/build_token_bucket_mixture.py \
+  runs/glm52-quality-mixture /path/to/immutable/GLM-5.2-tokenizer \
+  --input targeted-template-v1 /path/to/targeted_quality.jsonl \
+    e60cc63ac674b45a5bdc45c3d068e76058024c237a29331c6d56b02bebaf20c4 \
+  --input wikipedia-corruption-v1 /path/to/teacher_free_rows.jsonl \
+    5841e7a00dd6109269d9a04d92ccfad26b207ab82b6570b17371b6d04f9a0078 \
+  --bucket 256 --bucket 384 --bucket 768 \
+  --tokenizer-json-sha256 \
+    19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d \
+  --tokenizer-config-sha256 \
+    98b1271574f41abf89427ae2dda030d94dc9478f0edc5a8bd240db213c6fd5fc
+```
+
+The exact output has 2,728 rows: 2,184 in `seq256`, 259 in `seq384`,
+and 285 in `seq768`. Observed maxima are exactly 256, 384, and 706. A second
+build was byte-identical, including every train Parquet. The builder rejects
+source/tokenizer hash drift, duplicate IDs or prompts, unaccepted rows, empty
+buckets, and any sequence above the largest bucket. The three matching
+full-model configs all validate as `CONFIG-PASS/RUNTIME-PENDING`.
+
 Measure the generated rows with the exact checkpoint tokenizer and chat
 template before choosing a sequence length:
 
