@@ -167,3 +167,35 @@ For the first full-model quality experiment compare rank-16 MLA-only against
 rank-16 MLA plus `lm_head` with identical data, seed, tokens and updates. Do
 not begin with routed-expert LoRA. The surgery checkpoint cannot decide this
 quality comparison; it only qualified the engineering path.
+
+## Full-model SFT qualification profile
+
+`run_full_sft_megatron.sh` is the fail-closed 753B qualification profile. It
+locks the immutable GLM-5.2 config and targeted train/validation hashes, five
+MLA targets at rank 16 / alpha 32, sequence length 256, and the source-derived
+64-H200 topology (TP8, EP32, DP8). Resolve it without a model download or GPU:
+
+```bash
+CONFIG_ONLY=1 \
+MODEL_PATH=/path/to/config-only-snapshot \
+TRAIN_FILE=/path/to/sft_train.parquet \
+VAL_FILE=/path/to/sft_validation.parquet \
+examples/glm52_lora/run_full_sft_megatron.sh > resolved.yaml
+
+python examples/glm52_lora/verify_full_sft_config.py resolved.yaml
+```
+
+The validator reports `CONFIG-PASS/RUNTIME-PENDING`; this is not a claim that
+the 753B checkpoint has trained. A real launch additionally requires the exact
+snapshot sentinel, eight exclusive H200s on every node, an explicit operator
+acknowledgement, and the SHA-256 from a prior TP2 adapter save/reload gate.
+
+Keep activation recomputation disabled for this short-sequence BSHD profile.
+An empirical 9B run with uniform one-layer full recomputation failed because
+backward recomputed DSA skip layer 10 before source layer 7 and the cross-layer
+top-k holder was empty. With recomputation disabled, the same two batches
+matched the prior THD losses and gradient norms exactly (`14.749032 / 221.216156`
+and `12.982867 / 20.208773`), while peak CUDA allocated/reserved rose from
+16.878/17.180 GiB to 17.726/17.973 GiB. Re-evaluate a DSA-aware recomputation
+schedule before increasing sequence length rather than enabling per-layer full
+recomputation.
