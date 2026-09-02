@@ -72,9 +72,9 @@ case "${qualification_profile}" in
       exit 2
     fi
     ;;
-  locked-quality-mixture-2728)
+  locked-quality-mixture-v2-2728)
     if (( steps != 33 || max_length != 768 || required_max_tokens != 706 )); then
-      echo "locked-quality-mixture-2728 requires STEPS=33, MAX_LENGTH=768, REQUIRED_MAX_TOKENS=706" >&2
+      echo "locked-quality-mixture-v2-2728 requires STEPS=33, MAX_LENGTH=768, REQUIRED_MAX_TOKENS=706" >&2
       exit 2
     fi
     ;;

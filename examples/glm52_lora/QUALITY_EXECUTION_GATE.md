@@ -9,7 +9,7 @@ The 9B surgery results prove the training path, not language quality.
 | gate | status | evidence or missing artifact |
 |---|---|---|
 | Immutable BF16 base | PASS | `zai-org/GLM-5.2@cf457fa734ab149ffef225f80893eb38c6ff5cdc` and locked `config.json` hash |
-| Teacher-free quality mixture | PASS | 2,728 rows, three no-truncation buckets, mixture SHA-256 `094a0385dcc27d647b92d2d4d40ad4ec7ae1bbeab8de878915efaed88bc824e7` |
+| Teacher-free quality mixture | PASS | `targeted-template-v2`, 2,728 rows, three no-truncation buckets, mixture SHA-256 `9a961a52595df23e8f5c110c780297d9470a5a6c1e36d831346c67254a26318f` |
 | Full-width surgery LoRA | PASS | finite backward, adapter export/reload, and MLA+`lm_head` ablation on the 9B fixture |
 | Tensor/expert sharding gates | PASS | TP2 evidence `80ce91da…958`; EP2 evidence `a6a739c9…e13` |
 | Full TP8/EP32 config | PASS, runtime pending | 64-H200 planning profile; this is not a memory or training pass |
@@ -30,6 +30,42 @@ The 9B surgery results prove the training path, not language quality.
 
 The launchers intentionally use different acknowledgement strings and run
 directories, so one profile cannot overwrite or masquerade as the other.
+
+## Hosted baseline preflight
+
+`generate_full_quality_baseline_hf.py` can cheaply test the live full-model
+behavior before reserving the H200 training allocation. It disables thinking
+explicitly: otherwise GLM-5.2 can consume a short output budget entirely as
+hidden reasoning and return an empty visible completion. The bundled 12-ID
+preflight covers four Markdown, four Han-cleanup, and four Russian-editing
+contracts.
+
+The script is resumable and requires an exact dynamic billing acknowledgement:
+
+```bash
+python examples/glm52_lora/generate_full_quality_baseline_hf.py \
+  /path/to/seq256/eval_contracts.jsonl \
+  /path/to/seq384/eval_contracts.jsonl \
+  /path/to/seq768/eval_contracts.jsonl \
+  --ids-file examples/glm52_lora/quality_preflight_ids.txt \
+  --output base-preflight.jsonl --max-examples 12 --max-tokens 256 \
+  --billing-ack 'max_examples=12,max_tokens=256' \
+  --unverified-revision-ack hosted-provider-revision-is-not-hf-pinned
+```
+
+This is only `HOSTED-PREFLIGHT/PROVIDER-REVISION-UNVERIFIED`. The HF
+conversational provider route does not accept a Hub commit revision, so it
+cannot replace generation from the exact full checkpoint during the final
+quality gate.
+
+The first bounded attempt completed 9 of 12 requests before the account's
+included inference credit was exhausted. It removed accidental Han in all four
+cleanup cases and returned valid Russian, but it also exposed a v1 evaluation
+bug: a correct table-only answer was rejected because the hidden contract
+required an unrequested heading. `targeted-template-v2` removes that heading
+from the target and contract. Resume now verifies the exact prompt, request
+messages, and quality contract, so stale v1 rows fail closed instead of being
+silently reused. The partial hosted run is diagnostic evidence only.
 
 ## Config-only commands
 

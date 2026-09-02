@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 from build_quality_dataset import DEFAULT_SYSTEM, validate_rows, write_artifacts
 
-DATASET_REVISION = "targeted-template-v1"
+DATASET_REVISION = "targeted-template-v2"
 REVIEWER = "deterministic-template-audit-v1"
 
 LIST_CASES = (
@@ -48,11 +48,11 @@ LIST_PROMPTS = (
     "Оформи данные в Markdown: заголовок «{title}» и нумерованный список в заданном порядке. Данные: {data}.",
     "Верни корректный Markdown с заголовком «{title}». Ниже нужен нумерованный список без перестановки: {data}.",
     "Структурируй сведения под заголовком «{title}» как нумерованный Markdown-список: {data}.",
-    "Сохрани порядок и оформи этапы в Markdown с заголовком «{title}»: {data}.",
+    "Сохрани порядок и оформи этапы нумерованным Markdown-списком с заголовком «{title}»: {data}.",
     "Подготовь раздел Markdown «{title}» и перечисли шаги числами: {data}.",
     "Преобразуй последовательность в раздел Markdown с заголовком «{title}» и нумерацией: {data}.",
     "Напиши только корректно оформленный раздел «{title}» с нумерованными пунктами: {data}.",
-    "Сделай заголовок Markdown «{title}», затем передай эти пункты по порядку: {data}.",
+    "Сделай заголовок Markdown «{title}», затем передай эти пункты нумерованным списком по порядку: {data}.",
 )
 
 TABLE_CONTEXTS = (
@@ -126,10 +126,10 @@ MIXED_CASES = tuple(
 )
 
 MIXED_PROMPTS = (
-    "Оформи Markdown-карточку «{title}»: список {data}, жирный вывод «{conclusion}», ссылка {url}.",
-    "Верни Markdown для «{title}»: bullets {data}; жирный вывод «{conclusion}»; ссылка {url}.",
-    "Собери раздел «{title}»: пункты {data}, жирный вывод «{conclusion}» и ссылка {url}.",
-    "Напиши Markdown-карточку «{title}»: список {data}, жирный вывод «{conclusion}», документация {url}.",
+    "Оформи Markdown-карточку с заголовком «{title}»: список {data}, жирный вывод «{conclusion}», ссылка {url}.",
+    "Верни Markdown с заголовком «{title}»: маркированный список {data}; жирный вывод «{conclusion}»; ссылка {url}.",
+    "Собери раздел с заголовком «{title}»: список из пунктов {data}, жирный вывод «{conclusion}» и ссылка {url}.",
+    "Напиши Markdown-карточку с заголовком «{title}»: список {data}, жирный вывод «{conclusion}», документация {url}.",
 )
 
 STYLE_CASES = (
@@ -314,7 +314,7 @@ def generate_rows() -> list[dict[str, Any]]:
     table_data = "; ".join(f"{status} — {action}" for status, action in table_rows)
     table_body = "\n".join(f"| {status} | {action} |" for status, action in table_rows)
     for group, context in enumerate(TABLE_CONTEXTS):
-        response = f"## {context.capitalize()}\n\n| Статус | Действие |\n| --- | --- |\n{table_body}"
+        response = f"| Статус | Действие |\n| --- | --- |\n{table_body}"
         for variant, template in enumerate(TABLE_PROMPTS):
             rows.append(
                 _row(
@@ -323,7 +323,7 @@ def generate_rows() -> list[dict[str, Any]]:
                     variant,
                     template.format(context=context, data=table_data),
                     response,
-                    _contract(require_markdown=True, blocks=("heading", "table")),
+                    _contract(require_markdown=True, blocks=("table",)),
                     ("markdown", "table", "russian"),
                 )
             )
@@ -406,7 +406,8 @@ def generate_rows() -> list[dict[str, Any]]:
                 "han-in-code",
                 group,
                 0,
-                f"Объясни по-русски присваивание и сохрани идентификатор без изменений: {code}",
+                "Объясни по-русски присваивание и сохрани идентификатор "
+                f"без изменений в закрытом блоке кода Markdown: {code}",
                 f"Код присваивает идентификатору числовое значение:\n\n```python\n{code}\n```",
                 _contract(require_markdown=True, blocks=("code",)),
                 ("accidental-han-control", "code", "russian"),

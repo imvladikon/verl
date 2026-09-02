@@ -64,7 +64,11 @@ def _index_rows(rows: list[dict[str, Any]], label: str) -> dict[str, dict[str, A
 def _require_equal_pair_contract(example_id: str, base: dict[str, Any], adapter: dict[str, Any]) -> None:
     if base.get("contract") != adapter.get("contract"):
         raise ValueError(f"{example_id}: base and adapter contracts differ")
-    for field in ("prompt_sha256", "decoding_contract_sha256"):
+    for field in (
+        "prompt_sha256",
+        "request_messages_sha256",
+        "decoding_contract_sha256",
+    ):
         base_value = base.get(field)
         adapter_value = adapter.get(field)
         if base_value is None and adapter_value is None:

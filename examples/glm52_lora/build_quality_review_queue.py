@@ -54,14 +54,15 @@ SOURCE_LOCKS = {
 
 MARKDOWN_WORD_RE = re.compile(r"\b(?:markdown|маркдаун(?:е|ом)?)\b", re.IGNORECASE)
 BLOCK_DEMAND_RE = {
-    "heading": re.compile(r"\b(?:заголов(?:ок|ки|ком)|раздел(?:ы|ами)?)\b", re.IGNORECASE),
+    "heading": re.compile(r"\b(?:заголов\w*|раздел\w*)\b", re.IGNORECASE),
     "list": re.compile(
-        r"\b(?:список|перечисл\w*|перечень|по пунктам|нумерованн\w*|маркированн\w*)\b",
+        r"\b(?:спис\w*|перечисл\w*|перечень|пункт\w*|нумерац\w*|нумерованн\w*|маркированн\w*|bullets?)\b",
         re.IGNORECASE,
     ),
     "table": re.compile(r"\b(?:таблиц\w*|табличн\w*)\b", re.IGNORECASE),
     "code": re.compile(
-        r"\b(?:блок кода|напиши код|приведи код|исходный код|скрипт\w*|программ\w*)\b",
+        r"\b(?:блок\w* (?:кода|markdown)|markdown-блок\w*|fenced-блок\w*|"
+        r"напиши код|приведи код|исходн\w* код|скрипт\w*|программ\w*)\b",
         re.IGNORECASE,
     ),
 }

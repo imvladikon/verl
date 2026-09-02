@@ -95,6 +95,7 @@ def test_comparator_reports_semantic_regression_as_failure() -> None:
     ("field", "new_value", "message"),
     [
         ("prompt_sha256", "different", "prompt_sha256"),
+        ("request_messages_sha256", "different", "request_messages_sha256"),
         ("decoding_contract_sha256", "different", "decoding_contract_sha256"),
         ("contract", {"requested_language": "zh"}, "contracts differ"),
     ],
@@ -102,6 +103,8 @@ def test_comparator_reports_semantic_regression_as_failure() -> None:
 def test_comparator_rejects_unpaired_contracts(field: str, new_value: object, message: str) -> None:
     base = [_row("same", "Ответ 中", 0.4)]
     adapter_row = _row("same", "Ответ.", 0.6)
+    if field == "request_messages_sha256":
+        base[0][field] = "original"
     adapter_row[field] = new_value
 
     with pytest.raises(ValueError, match=message):

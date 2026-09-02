@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "examples" / "glm52_lora"))
 
 from build_quality_dataset import validate_rows  # noqa: E402
+from build_quality_review_queue import _markdown_contract  # noqa: E402
 from generate_targeted_quality_data import (  # noqa: E402
     DATASET_REVISION,
     generate_rows,
@@ -58,6 +59,21 @@ def test_targeted_prompts_and_ids_are_unique_and_generation_is_deterministic() -
     assert first == second
     assert len({row["id"] for row in first}) == len(first)
     assert len({row["prompt"] for row in first}) == len(first)
+
+
+def test_every_required_markdown_block_is_explicitly_requested() -> None:
+    for row in generate_rows():
+        inferred, _ = _markdown_contract(row["prompt"], row["response"])
+        required = set(row["contract"]["required_markdown_blocks"])
+        assert required <= set(inferred.required_blocks), row["id"]
+
+
+def test_table_targets_honor_table_only_prompts() -> None:
+    table_rows = [row for row in generate_rows() if "markdown-table" in row["tags"]]
+    assert len(table_rows) == 128
+    assert all(row["contract"]["required_markdown_blocks"] == ["table"] for row in table_rows)
+    assert all(row["response"].startswith("| Статус | Действие |") for row in table_rows)
+    assert all(not row["response"].startswith("#") for row in table_rows)
 
 
 def test_han_cleanup_and_scope_controls_have_the_intended_boundary() -> None:

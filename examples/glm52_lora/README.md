@@ -253,8 +253,8 @@ authentic-text rows with the exact surgery tokenizer:
 ```bash
 python examples/glm52_lora/build_token_bucket_mixture.py \
   runs/glm52-quality-mixture /path/to/immutable/GLM-5.2-tokenizer \
-  --input targeted-template-v1 /path/to/targeted_quality.jsonl \
-    e60cc63ac674b45a5bdc45c3d068e76058024c237a29331c6d56b02bebaf20c4 \
+  --input targeted-template-v2 /path/to/targeted_quality.jsonl \
+    2f6072525e971fa5798473049078c0209b51fd799a0d4d95781901527700a938 \
   --input wikipedia-corruption-v1 /path/to/teacher_free_rows.jsonl \
     5841e7a00dd6109269d9a04d92ccfad26b207ab82b6570b17371b6d04f9a0078 \
   --bucket 256 --bucket 384 --bucket 768 \
@@ -288,6 +288,15 @@ dataset keeps one optimizer; chaining three adapter-only jobs would reset the
 optimizer, while ordinary checkpoint resume would incorrectly restore the
 previous bucket's dataloader state.
 
+The `targeted-template-v2` gate completed all 33 updates on the 9B surgery
+checkpoint. Loss was finite from `14.3883` at step 1 through `8.6188` at step
+33; every gradient norm was finite. Peak CUDA allocated/reserved was
+`21.218/21.809 GiB` and the external sampler observed `25,254 MiB`. Export
+contained 100 finite adapter tensors with all 50 LoRA-B tensors nonzero; reload
+changed logits by L2 `3594.38`. The evidence root is
+`d62fd1a61489d3790004c654193fa6a7c6664740a6ef056f7972c4eeb742fcf2`.
+This remains an engineering gate, not evidence that the full model improved.
+
 Measure the generated rows with the exact checkpoint tokenizer and chat
 template before choosing a sequence length:
 
@@ -298,9 +307,9 @@ python examples/glm52_lora/audit_quality_tokens.py \
   --output runs/glm52-targeted-quality/token_audit.json
 ```
 
-The pinned surgery tokenizer audit of `targeted-template-v1` measured 79,674
-full-chat tokens. Full-chat length was p50 105, p95 166, p99 180, and maximum
-187 tokens, so sequence length 256 covers this targeted set without
+The pinned surgery tokenizer audit of `targeted-template-v2` measured 79,466
+full-chat tokens. Full-chat length was p50 105, p95 171, p99 185, and maximum
+191 tokens, so sequence length 256 covers this targeted set without
 truncation. Re-run the audit after adding reviewed public-source rows; those
 lengths are not covered by this measurement.
 
@@ -350,6 +359,8 @@ The executable status matrix and sequential decision gate are in
 [`QUALITY_EXECUTION_GATE.md`](QUALITY_EXECUTION_GATE.md). The locked production
 wrappers differ only in adapter surface, acknowledgement, output directory,
 and experiment name; both pin seed 52 and the same 33-update data stream.
+The same gate documents the bounded hosted full-model baseline preflight and
+its explicit limitation: provider routing cannot prove an exact Hub revision.
 
 The `lm_head` engineering ablation is reproducible with:
 

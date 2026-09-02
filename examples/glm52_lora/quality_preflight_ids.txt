@@ -1,0 +1,12 @@
+targeted-markdown-list-01-00
+targeted-markdown-table-01-00
+targeted-markdown-code-01-00
+targeted-markdown-mixed-01-00
+targeted-han-cleanup-01-00
+wikipedia-ru-84ac883dd8e5e14c-han-cleanup
+wikipedia-ru-d5c478617c046116-han-cleanup
+targeted-han-cleanup-01-01
+targeted-russian-style-01-00
+wikipedia-ru-84ac883dd8e5e14c-russian-latin-confusable-cleanup
+wikipedia-ru-84ac883dd8e5e14c-russian-case-period-restoration
+targeted-russian-style-01-01

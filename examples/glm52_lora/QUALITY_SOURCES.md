@@ -30,7 +30,7 @@ deterministic targeted set is required before the full-model experiment.
 
 ## Project-authored targeted set
 
-`generate_targeted_quality_data.py` creates `targeted-template-v1` without a
+`generate_targeted_quality_data.py` creates `targeted-template-v2` without a
 teacher model. Each target is an exact rendering or correction of data already
 present in its prompt. It emits 720 rows split by semantic group, including
 416 Markdown-required rows, 128 accidental-Han removal rows, 48 controls that
@@ -39,12 +39,16 @@ intentional Chinese text. All rows carry project-authored Apache-2.0
 provenance and the explicit review method `deterministic-template-audit`.
 
 The validated artifact has dataset SHA-256
-`e60cc63ac674b45a5bdc45c3d068e76058024c237a29331c6d56b02bebaf20c4`.
+`2f6072525e971fa5798473049078c0209b51fd799a0d4d95781901527700a938`.
 Using the exact surgery-checkpoint tokenizer, its full chat sequences have
-p95 166, p99 180, and maximum 187 tokens. The targeted set can be trained and
+p95 171, p99 185, and maximum 191 tokens. The targeted set can be trained and
 evaluated independently as a diagnostic, but a quality adapter must combine
 it with accepted human-reviewed general-Russian rows and preserve separate
 held-out results for each failure family.
+
+Version 2 removes an unrequested heading from all table targets and contracts,
+makes every remaining required Markdown block explicit in the prompt, and
+adds a regression test against hidden structural requirements.
 
 ## Teacher-free authentic Russian corruption set
 
@@ -89,12 +93,15 @@ no-truncation sequence lengths are 384 and 768 respectively. Both bucket
 builds were reproduced byte-for-byte from the same source sample.
 
 The locked ASAP mixture combines this 2,008-row artifact with the 720-row
-`targeted-template-v1` artifact; it does not include the pending Aya/OASST1
+`targeted-template-v2` artifact; it does not include the pending Aya/OASST1
 review queue. Exact full-chat tokenization assigns 2,184 rows to `seq256`, 259
 to `seq384`, and 285 to `seq768`, with no truncation. Mixture SHA-256 is
-`094a0385dcc27d647b92d2d4d40ad4ec7ae1bbeab8de878915efaed88bc824e7`.
+`9a961a52595df23e8f5c110c780297d9470a5a6c1e36d831346c67254a26318f`.
 Both input JSONL hashes and both tokenizer-file hashes are mandatory arguments,
 and the builder fails closed on any unaccepted row or oversized sequence.
+The v2 mixture was independently rebuilt byte-for-byte and passed the 33-step
+9B surgery gate with finite loss and gradient norms; its evidence root is
+`d62fd1a61489d3790004c654193fa6a7c6664740a6ef056f7972c4eeb742fcf2`.
 
 ## Excluded from the first mixture
 

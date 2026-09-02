@@ -13,15 +13,15 @@ repo_root=$(cd -- "${script_dir}/../.." && pwd)
 python_bin=${PYTHON_BIN:-python3}
 mixture_dir=${MIXTURE_DIR:?Set MIXTURE_DIR to the locked 2,728-row artifact}
 model_path=${MODEL_PATH:-imvladikon/GLM-5.2-9B-LoRA-Surgery-Dummy}
-run_dir=${RUN_DIR:-${repo_root}/runs/glm52-lora-surgery-locked-mixture}
+run_dir=${RUN_DIR:-${repo_root}/runs/glm52-lora-surgery-locked-mixture-v2}
 gpu_id=${GPU_ID:-}
 config_only=${CONFIG_ONLY:-0}
 
-expected_manifest_sha256=e0e471b74d2b56cbbb681f665899d355f2b30505ea93a996cab2cd9187d54aef
-expected_seq256_manifest_sha256=d9d6f073d302a8e34ad20b0088298ef1da72a1d6a430d94d2a3df2cb8ec77780
+expected_manifest_sha256=8453969b0a1e56fd876bef39ce8095ed45644e1e5c5f44217dc0eec869c419ed
+expected_seq256_manifest_sha256=ef4e1b801b9ec49dfc5c737b89a9dd19014871158a83f88cb4413ab016f5fc27
 expected_seq384_manifest_sha256=8ee60b837211a0f8375426d60e9a26f4197071df0fc96c8e5d351b6e4168382e
 expected_seq768_manifest_sha256=28c3aed75965d17cedd2899fec5e428f9e3aa6cea2d4b21a64d6088c28b89c51
-expected_seq256_train_sha256=cb25249a0b43ccc45c1c984a942a6f2b0f6741569af868f6c948e707ae57bf93
+expected_seq256_train_sha256=360d64bb9f8d84748f13ff113dd736b75c6365b29155b4c2ea0cb4b4602bf819
 expected_seq384_train_sha256=4d3eb1440dff7c5fde198130f4afc14c2990da685680599aff888b8e21e1dbb0
 expected_seq768_train_sha256=ed6398563751b5e80351aca9cd3802011b0473eeb807ae3a4250b3338004f24b
 
@@ -91,7 +91,7 @@ export STEPS=33
   optim.lr=1e-4 \
   trainer.save_freq=11 \
   trainer.max_ckpt_to_keep=3 \
-  trainer.experiment_name=surgery-sft-locked-mixture-33-updates
+  trainer.experiment_name=surgery-sft-locked-mixture-v2-33-updates
 
 if [[ "${config_only}" == 1 ]]; then
   exit 0
