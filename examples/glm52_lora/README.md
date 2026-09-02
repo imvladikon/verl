@@ -369,8 +369,10 @@ prefer it; that choice remains a controlled full-model held-out ablation.
 
 `run_full_sft_megatron.sh` is the fail-closed 753B qualification profile. It
 locks the immutable GLM-5.2 config and targeted train/validation hashes, five
-MLA targets at rank 16 / alpha 32, sequence length 256, and the source-derived
-64-H200 topology (TP8, EP32, DP8). Resolve it without a model download or GPU:
+MLA targets at rank 16 / alpha 32, sequence length 256, and a calculated
+64-H200 candidate topology (TP8, EP32, dense-DP8, expert-DP2). This topology
+is process-grid-valid but has not run the full 753B checkpoint. Resolve it
+without a model download or GPU:
 
 ```bash
 CONFIG_ONLY=1 \
@@ -381,6 +383,34 @@ examples/glm52_lora/run_full_sft_megatron.sh > resolved.yaml
 
 python examples/glm52_lora/verify_full_sft_config.py resolved.yaml
 ```
+
+The validator includes a config-only parameter and static-memory calculation.
+It can also be run directly against the 1.5-TB checkpoint's small
+`config.json`; it never opens a weight shard:
+
+```bash
+python examples/glm52_lora/estimate_full_sft_memory.py \
+  /path/to/GLM-5.2/config.json \
+  --tp 8 --ep 32 --etp 1 --lora-rank 16 --sequence-length 768 \
+  --expect-policy-parameters 743377000704
+```
+
+The analytic split is 724,775,731,200 routed-expert parameters,
+1,573,443,840 TP-replicated parameters, and 17,027,825,664 TP-sharded
+parameters. It exactly reproduces both the official 743,377,000,704-policy
+parameter count and the per-rank numel observed in our TP2 and EP2 surgery
+runs. At TP8/EP32/ETP1 each rank holds 26,351,163,648 base parameters
+(`49.083 GiB` BF16) and 29,552,640 rank-16 adapter parameters. A conservative
+16-byte adapter-state estimate makes the static total `49.523 GiB` per GPU.
+
+Scaling the measured 9B seq768 non-static allocation linearly by policy
+layers and tokens projects `79.182 GiB` PyTorch allocated for the full model.
+The estimator also reports a deliberately padded `102.011 GiB` planning
+envelope (1.5x that dynamic projection plus 8 GiB for non-PyTorch CUDA and
+communication workspaces). Neither number is a runtime proof: conversion
+staging, allocator behavior, collectives, and the real 78-layer DSA schedule
+can differ. They justify an H200 qualification attempt, not an automatic
+launch.
 
 For the pinned authentic-Russian sample, keep the same fail-closed full-model
 profile but replace the dataset locks and audited sequence bound:
@@ -401,7 +431,8 @@ python examples/glm52_lora/verify_full_sft_config.py \
 The validator reports `CONFIG-PASS/RUNTIME-PENDING`; this is not a claim that
 the 753B checkpoint has trained. A real launch additionally requires the exact
 snapshot sentinel, eight exclusive H200s on every node, an explicit operator
-acknowledgement, and the SHA-256 from a prior TP2 adapter save/reload gate.
+acknowledgement, and the exact evidence roots from the passed TP2 adapter
+save/reload and EP2 expert-routing save/reload gates.
 
 The production candidate consumes all three locked train buckets in one
 optimizer stream and all three disjoint validation buckets at the final step.
@@ -422,7 +453,7 @@ python examples/glm52_lora/verify_full_sft_config.py \
 ```
 
 This wrapper remains fail-closed on the same explicit 64-H200 acknowledgement
-and prior TP2 adapter save/reload SHA. `CONFIG-PASS/RUNTIME-PENDING` is not
+and exact TP2/EP2 evidence roots. `CONFIG-PASS/RUNTIME-PENDING` is not
 permission or evidence for a full-model launch.
 
 Keep activation recomputation disabled for this short-sequence BSHD profile.

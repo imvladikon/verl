@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the resolved Hydra config for the 64-H200 GLM-5.2 SFT gate."""
+"""Validate the resolved Hydra config for the 64-H200 GLM-5.2 SFT candidate."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from estimate_full_sft_memory import EXPECTED_FULL_POLICY_PARAMETERS, estimate
+
 EXPECTED_TARGETS = [
     "linear_q_down_proj",
     "linear_q_up_proj",
@@ -16,11 +18,88 @@ EXPECTED_TARGETS = [
     "linear_kv_up_proj",
     "linear_proj",
 ]
+EXPECTED_NUM_EXPERTS = 256
+EXPECTED_TP_GATE_SHA256 = (
+    "80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958"
+)
+EXPECTED_EP_GATE_SHA256 = (
+    "a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13"
+)
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(f"CONFIG-FAIL: {message}")
+
+
+def file_count(value: str | list[str] | None, *, label: str) -> int:
+    """Count Hydra path-or-list fields without treating a path as characters."""
+    if isinstance(value, str):
+        require(bool(value), f"{label} path must not be empty")
+        return 1
+    require(isinstance(value, list), f"{label} files must resolve to a path or list")
+    require(
+        all(isinstance(path, str) and path for path in value), f"invalid {label} path"
+    )
+    return len(value)
+
+
+def compute_parallel_topology(config: dict) -> dict[str, int]:
+    """Mirror MCore's independent dense and expert process-grid arithmetic."""
+    engine = config["engine"]
+    trainer = config["trainer"]
+    nodes = trainer["nnodes"]
+    gpus_per_node = trainer["n_gpus_per_node"]
+    world_size = nodes * gpus_per_node
+    tp = engine["tensor_model_parallel_size"]
+    ep = engine["expert_model_parallel_size"]
+    etp = engine["expert_tensor_parallel_size"]
+    pp = engine["pipeline_model_parallel_size"]
+    cp = engine["context_parallel_size"]
+
+    for name, value in {
+        "world size": world_size,
+        "TP": tp,
+        "EP": ep,
+        "ETP": etp,
+        "PP": pp,
+        "CP": cp,
+    }.items():
+        require(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0,
+            f"{name} must be positive",
+        )
+
+    dense_grid = tp * pp * cp
+    expert_grid = etp * ep * pp
+    require(
+        world_size % dense_grid == 0,
+        f"world size {world_size} is not divisible by dense TP*PP*CP grid {dense_grid}",
+    )
+    require(
+        world_size % expert_grid == 0,
+        f"world size {world_size} is not divisible by expert ETP*EP*PP grid {expert_grid}",
+    )
+    require(
+        EXPECTED_NUM_EXPERTS % ep == 0,
+        f"{EXPECTED_NUM_EXPERTS} routed experts are not divisible by EP={ep}",
+    )
+    if tp > 1 and ep > 1:
+        require(engine["sequence_parallel"] is True, "TP+EP requires sequence parallel")
+
+    return {
+        "nodes": nodes,
+        "gpus_per_node": gpus_per_node,
+        "world_size": world_size,
+        "tp": tp,
+        "ep": ep,
+        "etp": etp,
+        "pp": pp,
+        "cp": cp,
+        "dense_dp": world_size // dense_grid,
+        "expert_dp": world_size // expert_grid,
+        "experts_per_ep_rank": EXPECTED_NUM_EXPERTS // ep,
+    }
 
 
 def main() -> None:
@@ -78,7 +157,8 @@ def main() -> None:
     require(data["train_batch_size"] == 64, "global batch drift")
     require(data["micro_batch_size_per_gpu"] == 1, "micro batch drift")
     require(
-        data["max_length"] == args.expected_max_length and data["max_token_len_per_gpu"] == args.expected_max_length,
+        data["max_length"] == args.expected_max_length
+        and data["max_token_len_per_gpu"] == args.expected_max_length,
         "sequence length drift",
     )
     require(data["truncation"] == "error", "truncation must fail closed")
@@ -87,11 +167,13 @@ def main() -> None:
         "GLM full-chat tokenization disabled",
     )
     require(
-        len(data["train_files"]) == args.expected_train_file_count,
+        file_count(data["train_files"], label="train")
+        == args.expected_train_file_count,
         "train-file count drift",
     )
     require(
-        len(data["val_files"]) == args.expected_val_file_count,
+        file_count(data["val_files"], label="validation")
+        == args.expected_val_file_count,
         "validation-file count drift",
     )
 
@@ -100,6 +182,10 @@ def main() -> None:
         trainer["nnodes"] == 8 and trainer["n_gpus_per_node"] == 8,
         "64-GPU topology drift",
     )
+    topology = compute_parallel_topology(config)
+    require(topology["dense_dp"] == 8, "dense DP drift")
+    require(topology["expert_dp"] == 2, "expert DP drift")
+    require(topology["experts_per_ep_rank"] == 8, "expert ownership drift")
     if args.expected_steps is None:
         require(2 <= trainer["total_training_steps"] <= 8, "step bound drift")
     else:
@@ -112,27 +198,39 @@ def main() -> None:
         "full-model checkpoint export enabled",
     )
 
-    per_layer_rank_one = 85056
-    trainable = 78 * 16 * per_layer_rank_one
+    model_config_path = Path(config["model"]["path"]) / "config.json"
+    require(
+        model_config_path.is_file(), f"model config is missing: {model_config_path}"
+    )
+    model_config = json.loads(model_config_path.read_text(encoding="utf-8"))
+    memory = estimate(
+        model_config,
+        tp=topology["tp"],
+        ep=topology["ep"],
+        etp=topology["etp"],
+        lora_rank=config["model"]["lora"]["rank"],
+        sequence_length=args.expected_max_length,
+    )
+    require(
+        memory["parameter_breakdown"]["policy_parameters"]
+        == EXPECTED_FULL_POLICY_PARAMETERS,
+        "full-model policy parameter count drift",
+    )
+    trainable = memory["lora"]["global_parameters"]
     result = {
         "status": "CONFIG-PASS/RUNTIME-PENDING",
-        "topology": {
-            "nodes": 8,
-            "gpus_per_node": 8,
-            "tp": 8,
-            "ep": 32,
-            "dp": 8,
-            "expert_dp": 2,
-            "pp": 1,
-            "cp": 1,
-        },
+        "topology": topology,
         "trainable_parameters": trainable,
         "training_steps": trainer["total_training_steps"],
         "max_length": args.expected_max_length,
         "bf16_adapter_mib": round(trainable * 2 / 2**20, 3),
         "unsharded_16_byte_bundle_gib": round(trainable * 16 / 2**30, 3),
+        "memory": memory,
         "full_model_runtime": None,
-        "required_prior_gate": "TP2 adapter-only save/reload SHA",
+        "required_prior_gates": {
+            "tp2_adapter_resume_evidence_root": EXPECTED_TP_GATE_SHA256,
+            "ep2_routing_resume_evidence_root": EXPECTED_EP_GATE_SHA256,
+        },
     }
     print(json.dumps(result, indent=2, sort_keys=True))
 

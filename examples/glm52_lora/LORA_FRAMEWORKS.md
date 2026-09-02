@@ -19,14 +19,12 @@ linear_kv_up_proj
 linear_proj
 ```
 
-This is the smallest profile with direct full-model evidence. Baseten's
-[pinned H100 recipe](https://github.com/basetenlabs/Megatron-Bridge/blob/5deb591cb370c488d5cd5593ae4a259fd451bd07/src/megatron/bridge/recipes/glm/h100/glm5.py)
-and
-[GB200 recipe](https://github.com/basetenlabs/Megatron-Bridge/blob/5deb591cb370c488d5cd5593ae4a259fd451bd07/src/megatron/bridge/recipes/glm/gb200/glm5.py)
-use the same five targets at rank 8 / alpha 16. Their
-[verification card](https://github.com/basetenlabs/Megatron-Bridge/blob/5deb591cb370c488d5cd5593ae4a259fd451bd07/examples/model_verification_cards/glm5-2/card.yaml)
-records two 100-step full-model LoRA runs with finite loss and gradient norms:
-208 H100s at TP1/PP13/EP16 and 192 GB200s at TP1/PP6/EP32.
+This is the smallest profile with direct full-model evidence. NVIDIA's current
+[verification card](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/08fc1c60ecb7cb5421ef3fdab0494d9a5b65e678/examples/model_verification_cards/glm5-2/card.yaml)
+records two 100-step BF16 full-model LoRA runs on these five targets at rank 8:
+208 H100s at TP1/PP13/EP16 and 192 GB200s at TP1/PP6/EP32. The H100 run's loss
+fell from 1.909421 to 0.8835775 with final gradient norm 0.101 and exactly 790
+adapter tensors; the GB200 loss fell from 1.831100 to 0.8957523.
 
 Those runs pin `zai-org/GLM-5.2@4d67f66c`. Our current checkpoint lock is
 `cf457fa7`; the two `config.json` files differ only by the newer explicit
@@ -35,8 +33,11 @@ still use our exact newer revision rather than silently inheriting the older
 card's claim.
 
 Our rank-16 profile has 106,149,888 trainable parameters over the 78 policy
-layers. That is 202.47 MiB for BF16 adapter weights and 1.384 GiB for a
-conservative unsharded 14-byte-per-parameter training bundle. If the separate
+layers. That is 202.47 MiB for BF16 adapter weights and 1.582 GiB for a
+conservative unsharded 16-byte-per-parameter training bundle. Under our TP8
+layout, Megatron replicates the q/kv down-projection factors but shards the
+other three adapters: each rank holds 29,552,640 adapter parameters, or 0.440
+GiB under the stricter 16-byte-per-parameter upper estimate. If the separate
 MTP layer is enabled and matched too, the count becomes 107,510,784. The
 current VERL quality profile deliberately disables MTP, as does the surgery
 fixture; MTP needs its own gate.
@@ -46,10 +47,11 @@ fixture; MTP needs its own gate.
 ### NeMo AutoModel
 
 The current
-[GLM-5.2 LoRA recipe](https://github.com/NVIDIA-NeMo/Automodel/blob/f22f55ca3ef3a981c6b65422ddc24d22092dc8f3/examples/llm_finetune/glm/glm_5.2_lora.yaml)
+[GLM-5.2 LoRA recipe](https://github.com/NVIDIA-NeMo/Automodel/blob/013906e2cdbeacad034030b3e71a833e965e0400/examples/llm_finetune/glm/glm_5.2_lora.yaml)
 is a useful independent FSDP2 implementation. It uses EP128, packed THD at
-4K, FP32 routing, gradient clipping at 1.0, chunked cross entropy, and a
-dequantized base checkpoint. Borrow those numerical and data-path choices.
+4K, rank 32 / alpha 64, FP32 routing, activation checkpointing, gradient
+clipping at 1.0, chunked cross entropy, and a dequantized base checkpoint.
+Borrow those numerical and data-path choices.
 Do not treat it as a drop-in VERL backend: it owns the model, distributed
 layout, optimizer, checkpointing, and training loop.
 
@@ -77,14 +79,13 @@ is the conversion and model-provider layer already used by VERL. It preserves
 MLA, DSA IndexShare, MoE routing, and reshardable distributed checkpoints.
 Use it directly rather than writing a second GLM conversion stack.
 
-The installed Bridge snapshot used by the 9B surgery run already contains the
-replicated-adapter handling needed for linears that are duplicated rather than
-TP-sharded. Baseten's
-[replicated LoRA fix](https://github.com/basetenlabs/Megatron-Bridge/commit/64f2ba0da8ea)
-and
-[gradient tests](https://github.com/basetenlabs/Megatron-Bridge/commit/cd3caa2edbc0)
-remain useful references for the pending TP2 gate; they are not evidence that
-our TP2 runtime has passed.
+The installed Bridge snapshot used by our surgery gates contains NVIDIA's
+merged [replicated-adapter fix](https://github.com/NVIDIA-NeMo/Megatron-Bridge/pull/5900).
+Without it, duplicated MLA q/kv down projections silently combine different
+sequence-parallel token shards and produce wrong adapter outputs and
+gradients. Our TP2 save/resume/reload gate and complementary EP2 routed-expert
+gate both passed on that code; their evidence roots are recorded in the main
+README.
 
 Baseten's
 [native GLM-5.2 FP8 expert import](https://github.com/basetenlabs/Megatron-Bridge/commit/e6ab3619a95f)
@@ -95,12 +96,14 @@ track, not a reason to change the first BF16 trainer run.
 
 ### NeMo RL
 
-[NeMo RL LoRA](https://github.com/NVIDIA-NeMo/RL/blob/8d1ca372f4ba38b59035ad1581a431ef586cb100/docs/guides/lora.md)
+[NeMo RL LoRA](https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/lora.md)
 supports SFT, GRPO, and DPO with either the AutoModel DTensor v2 backend or the
 Megatron backend. It is a separate end-to-end trainer and a useful parity
 oracle. Its AutoModel Triton LoRA path must be disabled for TP greater than
-one. Adopting it would be an explicit framework comparison, not an AutoModel
-component inserted into VERL.
+one. Generic LoRA support is not GLM-5.2 qualification: the dedicated
+[GLM-5.2 NeMo RL issue](https://github.com/NVIDIA-NeMo/RL/issues/3172) remains
+open and explicitly asks for GRPO support. Adopting it would be an explicit
+framework comparison, not an AutoModel component inserted into VERL.
 
 ### Slime
 

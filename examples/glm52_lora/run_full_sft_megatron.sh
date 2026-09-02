@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Full GLM-5.2 quality-SFT qualification profile. CONFIG_ONLY=1 resolves the
 # Hydra job without touching a GPU. A real launch is deliberately blocked
-# until the immutable full checkpoint, 64 exclusive H200s, and a prior TP2
-# adapter checkpoint/reload gate are all supplied.
+# until the immutable full checkpoint, 64 exclusive H200s, and the exact
+# validated TP2 and EP2 adapter/routing gate evidence are all supplied.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=${VERL_REPO_ROOT:-$(cd -- "${script_dir}/../.." && pwd)}
@@ -29,6 +29,8 @@ config_only=${CONFIG_ONLY:-0}
 
 expected_model_revision=cf457fa734ab149ffef225f80893eb38c6ff5cdc
 expected_config_sha256=185f93ee6d12548e16a847e279dc0c3c90b1524c970b0866b42fb545747d859a
+expected_tp_adapter_gate_sha256=80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958
+expected_ep_routing_gate_sha256=a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13
 expected_train_sha256=${EXPECTED_TRAIN_SHA256:-c2b970b938c171ce4db805d5274a4d8f3771d40307e20f56c7f4fcfd9832fe6c}
 expected_val_sha256=${EXPECTED_VAL_SHA256:-df60c803f1988843bef46c8438084810afd61b6dcf278b371beaf1b3f1212c87}
 
@@ -67,7 +69,7 @@ if (( max_length < required_max_tokens )); then
   exit 2
 fi
 if (( nnodes != 8 || gpus_per_node != 8 || nnodes * gpus_per_node != 64 )); then
-  echo "profile is locked to the source-qualified 8 nodes x 8 GPUs" >&2
+  echo "profile is locked to the unverified 8 nodes x 8 H200 candidate topology" >&2
   exit 2
 fi
 if (( node_rank < 0 || node_rank >= nnodes )); then
@@ -100,8 +102,12 @@ if [[ "${config_only}" != 1 ]]; then
     echo "set FULL_MODEL_ACK=GLM52_64H200_MLA_R16 after auditing the allocation" >&2
     exit 4
   fi
-  if [[ ! "${TP_ADAPTER_GATE_SHA:-}" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "set TP_ADAPTER_GATE_SHA to the 64-hex result of the passing TP2 save/reload gate" >&2
+  if [[ "${TP_ADAPTER_GATE_SHA:-}" != "${expected_tp_adapter_gate_sha256}" ]]; then
+    echo "TP_ADAPTER_GATE_SHA must match the validated TP2 evidence root" >&2
+    exit 4
+  fi
+  if [[ "${EP_ROUTING_GATE_SHA:-}" != "${expected_ep_routing_gate_sha256}" ]]; then
+    echo "EP_ROUTING_GATE_SHA must match the validated EP2 evidence root" >&2
     exit 4
   fi
   if [[ ! -f "${model_path}/model.safetensors.index.json" ]]; then
