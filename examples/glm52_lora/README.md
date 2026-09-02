@@ -87,6 +87,29 @@ the two GPUs. The final 13,608,960-parameter adapter produced a finite nonzero
 logit delta after a fresh reload. Its complete evidence-manifest root is
 `80ce91da59c5615618b03c14fb74163374c7bb8e529c699ab0a661cfcd0ee958`.
 
+## EP2 routed-expert gate
+
+The complementary two-GPU gate sets `TP=1`, `EP=2`, `DP=2`, and
+expert-DP=1. Each rank owns eight of the surgery model's 16 routed experts;
+MLA-only LoRA stays replicated and its optimizer is distributed across DP:
+
+```bash
+EP_GATE_ACK=GLM52_EP2_MLA_R16 GPU_IDS=5,7 \
+MODEL_PATH=/path/to/immutable/GLM-5.2-9B-LoRA-Surgery-Dummy \
+TRAIN_FILE=/path/to/locked/sft_train.parquet \
+examples/glm52_lora/run_surgery_sft_ep2_gate.sh
+```
+
+The gate saves separate `data_0.pt` and `data_1.pt`, resumes both DP ranks in
+a fresh process, and requires the locked global-token sequence `186, 288,
+214`. The qualified run observed finite losses
+`14.51996, 13.63048, 12.50402`, finite gradient norms
+`218.45088, 34.82770, 11.59513`, and sampled peaks of 19,210/19,056 MiB. Its
+final adapter reloaded with a finite nonzero logit delta. Evidence-manifest
+root: `a6a739c9e8a8031e89506da1f582b0255b5513823d5ace17b4fe5f723aa0ee13`.
+This validates routed-expert sharding without expert LoRA; it does not by
+itself validate the full model's EP32 topology.
+
 The first profile adapts only the five MLA projections. `lm_head`, the DSA
 indexer, shared experts, and routed experts are separate ablations after the
 MLA-only save/reload, sharding, hot-sync, and finite-gradient gates pass.
