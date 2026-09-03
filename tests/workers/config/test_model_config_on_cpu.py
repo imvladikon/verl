@@ -12,7 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +21,7 @@ from verl.workers.config.model import HFModelConfig, _disable_mtp_layers
 
 
 class TestHFModelConfigCPU:
-    model_path = os.path.expanduser("~/models/Qwen/Qwen2.5-0.5B")  # Just a path string, not loaded
+    model_path = "unused-model-id"
 
     def test_target_modules_accepts_list_via_omegaconf(self):
         """
