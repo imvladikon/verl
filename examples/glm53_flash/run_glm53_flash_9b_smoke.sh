@@ -8,6 +8,8 @@ run_id=${GLM53_RUN_ID:-fsdp_grpo_9b_$(date -u +%Y%m%dT%H%M%SZ)}
 output_dir=${OUTPUT_DIR:-"${repo_root}/outputs/glm53_flash/${run_id}"}
 data_dir=${DATA_DIR:-"${output_dir}/data"}
 rollout_memory=${GLM53_ROLLOUT_GPU_MEMORY_UTILIZATION:-0.55}
+optimizer_impl=${GLM53_OPTIMIZER_IMPL:-torchao.optim}
+optimizer_name=${GLM53_OPTIMIZER:-AdamW8bit}
 # Ray appends a long session/socket suffix. Keep the default short enough for
 # Linux's 107-byte AF_UNIX path limit and unique on a shared host.
 ray_tmpdir=${GLM53_RAY_TMPDIR:-"/tmp/g53-ray-${UID}-$$"}
@@ -38,7 +40,7 @@ mkdir -p "${output_dir}" "${data_dir}" "${ray_tmpdir}"
   --profile flash \
   --output "${output_dir}/provenance.json"
 
-MODEL_PATH="${model_path}" "${runner[@]}" - <<'PY'
+MODEL_PATH="${model_path}" GLM53_OPTIMIZER_IMPL="${optimizer_impl}" "${runner[@]}" - <<'PY'
 import importlib.metadata
 import json
 import os
@@ -54,9 +56,20 @@ if quantization.get("dequantize") is not True:
         "The A100 actor needs quantization_config.dequantize=true in a local "
         "copy of the 9B surgery checkpoint"
     )
-if importlib.metadata.version("torchao") != "0.18.0":
+if (
+    os.environ["GLM53_OPTIMIZER_IMPL"] == "torchao.optim"
+    and importlib.metadata.version("torchao") != "0.18.0"
+):
     raise SystemExit("This smoke was qualified with torchao==0.18.0")
 PY
+
+optimizer_args=(
+  actor_rollout_ref.actor.optim.optimizer_impl="${optimizer_impl}"
+  actor_rollout_ref.actor.optim.optimizer="${optimizer_name}"
+)
+if [[ ${optimizer_impl} == torchao.optim ]]; then
+  optimizer_args+=(+actor_rollout_ref.actor.optim.override_optimizer_config.bf16_stochastic_round=true)
+fi
 
 "${runner[@]}" -m verl.trainer.main_ppo \
   trainer.v1.sampler.sync_refill_failed_groups=true \
@@ -78,9 +91,7 @@ PY
   actor_rollout_ref.model.enable_gradient_checkpointing=true \
   actor_rollout_ref.model.freeze_vision_tower=true \
   actor_rollout_ref.actor.optim.lr=0.000001 \
-  actor_rollout_ref.actor.optim.optimizer_impl=torchao.optim \
-  actor_rollout_ref.actor.optim.optimizer=AdamW8bit \
-  +actor_rollout_ref.actor.optim.override_optimizer_config.bf16_stochastic_round=true \
+  "${optimizer_args[@]}" \
   actor_rollout_ref.actor.ppo_mini_batch_size=2 \
   actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
   actor_rollout_ref.actor.use_dynamic_bsz=false \
@@ -90,7 +101,7 @@ PY
   actor_rollout_ref.actor.fsdp_config.param_offload=true \
   actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
   actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
-  actor_rollout_ref.actor.fsdp_config.use_orig_params=true \
+  actor_rollout_ref.actor.fsdp_config.use_orig_params=false \
   actor_rollout_ref.rollout.quantization=fp8 \
   actor_rollout_ref.rollout.name=sglang \
   actor_rollout_ref.rollout.mode=async \
