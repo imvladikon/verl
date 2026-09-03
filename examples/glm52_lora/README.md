@@ -514,7 +514,9 @@ length 256; the locked quality mixture uses 768. The launcher defaults to the
 original W64/TP8/EP32 plan. The currently qualified family accepts explicit
 W/EP choices with TP8, ETP1, PP1, CP1, eight GPUs per node, and
 EP8/16/32/128. The header- and capacity-qualified first official-FP8
-candidate is W128/TP8/EP128; it is still runtime-pending.
+seq768 candidate is W32/TP8/EP32 on measured 141-GiB devices; it is still
+runtime-pending. W128/TP8/EP128 remains a valid process grid, but no longer
+passes the 80-GiB seq768 memory gate.
 Every real launch must pass the memory planner using the smallest capacity
 reported by `nvidia-smi` across the allocated visible GPUs. Resolve a config
 without a model download or GPU:
@@ -565,13 +567,14 @@ runs. At TP8/EP32/ETP1 each rank holds 26,351,163,648 base parameters
 (`49.083 GiB` BF16) and 29,552,640 rank-16 adapter parameters. A conservative
 16-byte adapter-state estimate makes the static total `49.523 GiB` per GPU.
 
-For W32/TP8/EP32, scaling the measured 9B seq768 non-static allocation by
-policy layers and tokens projects `79.182 GiB` PyTorch allocated. The
-estimator reports a deliberately padded `102.011 GiB` planning envelope
+For W32/TP8/EP32, scaling the worst measured 9B locked-mixture allocation
+(`21.218 GiB`, stable from step 3 through step 33) by policy layers and tokens
+projects `86.126 GiB` PyTorch allocated. The estimator reports a deliberately
+padded `112.428 GiB` planning envelope
 (static state plus 1.5x the projected non-static residual and 8 GiB for
 non-PyTorch CUDA and communication workspaces). At seq768, the corresponding
-envelopes are `228.573 GiB` for
-W8/TP8/EP8 and `144.198 GiB` for W16/TP8/EP16. Consequently W8 is a candidate
+envelopes are `238.990 GiB` for
+W8/TP8/EP8 and `154.615 GiB` for W16/TP8/EP16. Consequently W8 is a candidate
 at measured 270 GiB, W16 is rejected at 141 GiB, and W32 is a candidate at
 141 GiB. These are analytic dispositions, not runtime proofs: conversion
 staging, allocator behavior, collectives, and the real 78-layer DSA schedule
@@ -579,10 +582,11 @@ can differ. They authorize only a guarded first qualification attempt.
 
 For the available 80-GiB allocation, W128/TP8/EP128 has 17.883 GiB of static
 BF16 model and rank-16 MLA adapter state per GPU. The measured-surgery
-projection is 47.541 GiB and the padded planning envelope is 70.370 GiB,
-leaving 9.63 GiB against nominal 80 GiB. Use `NNODES=16 EP_SIZE=128` and the
-FP8-dequant checkpoint profile; this is a capacity candidate, not a claim that
-the full import or first optimizer step has completed.
+projection is 54.486 GiB and the padded planning envelope is 80.787 GiB. It is
+therefore `REJECT-ENVELOPE` at seq768 even before the separate 8-GiB minimum
+post-envelope headroom is enforced. Use this grid only after a shorter
+sequence, DSA-safe recomputation, context parallelism, or another memory
+reduction has its own runtime qualification.
 
 The official FP8 profile is selected explicitly. The source identity is a
 configuration lock; an infrastructure-specific delivery recipe must

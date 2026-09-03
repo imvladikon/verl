@@ -161,9 +161,9 @@ def test_full_tp8_ep32_static_estimate() -> None:
     projection = result["empirical_activation_projection"]
     assert projection["depth_token_scale"] == pytest.approx(7.8)
     assert projection["projected_torch_allocated_gib"] == pytest.approx(
-        79.181566, abs=1e-6
+        86.126332, abs=1e-6
     )
-    assert projection["planning_envelope_gib"] == pytest.approx(102.010731, abs=1e-6)
+    assert projection["planning_envelope_gib"] == pytest.approx(112.427881, abs=1e-6)
     assert projection["runtime_proof"] is False
 
 
@@ -186,10 +186,10 @@ def test_full_tp8_ep32_mla_lm_head_static_estimate() -> None:
     assert result["static_upper_gib"] == pytest.approx(49.528035, abs=1e-6)
     projection = result["empirical_activation_projection"]
     assert projection["projected_torch_allocated_gib"] == pytest.approx(
-        79.186365, abs=1e-6
+        86.131131, abs=1e-6
     )
     assert projection["planning_envelope_gib"] == pytest.approx(
-        102.015529, abs=1e-6
+        112.432679, abs=1e-6
     )
 
 

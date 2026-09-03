@@ -48,8 +48,8 @@ def test_eight_high_capacity_gpus_are_an_analytic_seq768_candidate() -> None:
         "experts_per_ep_rank": 32,
         "minimum_factor_world_size": 8,
     }
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(228.573231)
-    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(41.426769)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(238.990381)
+    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(31.009619)
     assert result["checkpoint_loading"]["active_policy_logical_read_tib"] == pytest.approx(
         1.589043
     )
@@ -66,7 +66,7 @@ def test_sixteen_141_gib_gpus_reject_seq768_envelope() -> None:
         device_capacity_gib=141,
     )
     assert result["disposition"] == "REJECT-ENVELOPE"
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(144.198231)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(154.615381)
 
 
 def test_sixteen_141_gib_gpus_are_seq384_candidate() -> None:
@@ -82,7 +82,7 @@ def test_sixteen_141_gib_gpus_are_seq384_candidate() -> None:
     assert result["disposition"] == "CANDIDATE"
     assert result["topology"]["dense_dp"] == 2
     assert result["topology"]["expert_dp"] == 1
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(121.954483)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(127.163058)
 
 
 def test_thirty_two_141_gib_gpus_are_seq768_candidate() -> None:
@@ -99,7 +99,21 @@ def test_thirty_two_141_gib_gpus_are_seq768_candidate() -> None:
     assert result["topology"]["dense_dp"] == 4
     assert result["topology"]["expert_dp"] == 1
     assert result["topology"]["experts_per_ep_rank"] == 8
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(102.010731)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(112.427881)
+
+
+def test_one_hundred_twenty_eight_80_gib_gpus_reject_worst_observed_seq768_envelope() -> None:
+    result = analyze_topology(
+        full_config(),
+        world_size=128,
+        tp=8,
+        ep=128,
+        etp=1,
+        sequence_length=768,
+        device_capacity_gib=80,
+    )
+    assert result["disposition"] == "REJECT-ENVELOPE"
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(80.787256)
 
 
 def test_output_head_profile_is_accounted_for() -> None:
@@ -134,7 +148,7 @@ def test_output_head_profile_is_accounted_for() -> None:
     )
 
 
-def test_marginal_capacity_is_not_promoted_to_candidate() -> None:
+def test_old_marginal_capacity_is_rejected_by_worst_observed_anchor() -> None:
     result = analyze_topology(
         full_config(),
         world_size=32,
@@ -145,8 +159,8 @@ def test_marginal_capacity_is_not_promoted_to_candidate() -> None:
         device_capacity_gib=80,
         minimum_additional_headroom_gib=8,
     )
-    assert result["disposition"] == "MARGINAL"
-    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(0.233017)
+    assert result["disposition"] == "REJECT-ENVELOPE"
+    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(-4.975558)
 
 
 def test_invalid_process_grid_fails_closed() -> None:
@@ -161,7 +175,7 @@ def test_invalid_process_grid_fails_closed() -> None:
         )
 
 
-def test_runtime_gate_rejects_marginal_candidate() -> None:
+def test_runtime_gate_rejects_over_capacity_candidate() -> None:
     result = analyze_topology(
         full_config(),
         world_size=32,
@@ -171,5 +185,5 @@ def test_runtime_gate_rejects_marginal_candidate() -> None:
         sequence_length=384,
         device_capacity_gib=80,
     )
-    with pytest.raises(ValueError, match="MARGINAL"):
+    with pytest.raises(ValueError, match="REJECT-ENVELOPE"):
         require_candidate_results([result])

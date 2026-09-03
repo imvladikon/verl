@@ -29,7 +29,9 @@ is 745,584,507,456 source bytes and expands to 1,486,754,078,208 bytes in BF16,
 exactly matching the previously audited BF16 policy checkpoint. At
 W128/TP8/EP128, expert tensors are read once while non-expert tensors are read
 by 128 ranks, for 3.061 TiB of logical source traffic. The topology remains a
-capacity-qualified candidate until a real full-checkpoint run completes.
+valid process grid, but the worst observed surgery-memory calibration now
+rejects its seq768 envelope on 80-GiB devices. It must not launch at that
+length without a separately qualified memory reduction.
 
 Megatron Bridge merged the required
 [GLM-5 FP8 import fix](https://github.com/NVIDIA-NeMo/Megatron-Bridge/pull/5851)

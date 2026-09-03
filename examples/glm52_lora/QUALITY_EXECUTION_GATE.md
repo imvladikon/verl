@@ -43,10 +43,11 @@ are:
 
 | topology | dense DP | expert DP | envelope/GPU | example disposition |
 |---|---:|---:|---:|---|
-| W8 / TP8 / EP8 / ETP1 | 1 | 1 | 228.573 GiB | candidate at measured 270 GiB; static reject at 141 GiB |
-| W16 / TP8 / EP16 / ETP1 | 2 | 1 | 144.198 GiB | envelope reject at 141 GiB |
-| W32 / TP8 / EP32 / ETP1 | 4 | 1 | 102.011 GiB | candidate at measured 141 GiB |
-| W64 / TP8 / EP32 / ETP1 | 8 | 2 | 102.011 GiB | candidate at measured 141 GiB; twice the expert source reads of W32 |
+| W8 / TP8 / EP8 / ETP1 | 1 | 1 | 238.990 GiB | candidate at measured 270 GiB; static reject at 141 GiB |
+| W16 / TP8 / EP16 / ETP1 | 2 | 1 | 154.615 GiB | envelope reject at 141 GiB |
+| W32 / TP8 / EP32 / ETP1 | 4 | 1 | 112.428 GiB | candidate at measured 141 GiB |
+| W64 / TP8 / EP32 / ETP1 | 8 | 2 | 112.428 GiB | candidate at measured 141 GiB; twice the expert source reads of W32 |
+| W128 / TP8 / EP128 / ETP1 | 16 | 1 | 80.787 GiB | envelope reject at 80 GiB |
 
 The planner adds a separate 8-GiB minimum headroom requirement after the
 padded envelope. A `CANDIDATE` is permission only for a guarded first runtime

@@ -21,7 +21,11 @@ EXPECTED_SURGERY_POLICY_PARAMETERS = 8_763_269_120
 SURGERY_MLA_R16_PARAMETERS = 13_608_960
 SURGERY_ANCHOR_LAYERS = 10
 SURGERY_ANCHOR_SEQUENCE_LENGTH = 768
-SURGERY_ANCHOR_PEAK_ALLOCATED_GIB = 20.328
+# Worst cumulative PyTorch allocation from the qualified 33-step locked-mixture
+# run.  The previous 20.328-GiB anchor came from a two-step seq768 bucket gate
+# and understated the largest allocation already observed with the same model,
+# adapter profile, and 768-token cap.
+SURGERY_ANCHOR_PEAK_ALLOCATED_GIB = 21.21835470199585
 
 
 def require(condition: bool, message: str) -> None:
