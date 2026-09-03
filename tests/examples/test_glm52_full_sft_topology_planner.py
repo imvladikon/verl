@@ -48,8 +48,8 @@ def test_eight_high_capacity_gpus_are_an_analytic_seq768_candidate() -> None:
         "experts_per_ep_rank": 32,
         "minimum_factor_world_size": 8,
     }
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(238.990381)
-    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(31.009619)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(238.748847)
+    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(31.251153)
     assert result["checkpoint_loading"]["active_policy_logical_read_tib"] == pytest.approx(
         1.589043
     )
@@ -66,7 +66,7 @@ def test_sixteen_141_gib_gpus_reject_seq768_envelope() -> None:
         device_capacity_gib=141,
     )
     assert result["disposition"] == "REJECT-ENVELOPE"
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(154.615381)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(154.373847)
 
 
 def test_sixteen_141_gib_gpus_are_seq384_candidate() -> None:
@@ -82,7 +82,7 @@ def test_sixteen_141_gib_gpus_are_seq384_candidate() -> None:
     assert result["disposition"] == "CANDIDATE"
     assert result["topology"]["dense_dp"] == 2
     assert result["topology"]["expert_dp"] == 1
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(127.163058)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(127.069815)
 
 
 def test_thirty_two_141_gib_gpus_are_seq768_candidate() -> None:
@@ -99,7 +99,7 @@ def test_thirty_two_141_gib_gpus_are_seq768_candidate() -> None:
     assert result["topology"]["dense_dp"] == 4
     assert result["topology"]["expert_dp"] == 1
     assert result["topology"]["experts_per_ep_rank"] == 8
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(112.427881)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(112.186347)
 
 
 def test_one_hundred_twenty_eight_80_gib_gpus_reject_worst_observed_seq768_envelope() -> None:
@@ -113,7 +113,7 @@ def test_one_hundred_twenty_eight_80_gib_gpus_reject_worst_observed_seq768_envel
         device_capacity_gib=80,
     )
     assert result["disposition"] == "REJECT-ENVELOPE"
-    assert result["memory"]["planning_envelope_gib"] == pytest.approx(80.787256)
+    assert result["memory"]["planning_envelope_gib"] == pytest.approx(80.545722)
 
 
 def test_output_head_profile_is_accounted_for() -> None:
@@ -139,8 +139,8 @@ def test_output_head_profile_is_accounted_for() -> None:
     assert mla_only["lora_profile"] == "mla-only"
     assert with_head["lora_profile"] == "mla-lm-head"
     assert (
-        with_head["memory"]["adapter_local_16_byte_upper_gib"]
-        > mla_only["memory"]["adapter_local_16_byte_upper_gib"]
+        with_head["memory"]["adapter_local_conservative_upper_gib"]
+        > mla_only["memory"]["adapter_local_conservative_upper_gib"]
     )
     assert (
         with_head["memory"]["planning_envelope_gib"]
@@ -160,7 +160,7 @@ def test_old_marginal_capacity_is_rejected_by_worst_observed_anchor() -> None:
         minimum_additional_headroom_gib=8,
     )
     assert result["disposition"] == "REJECT-ENVELOPE"
-    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(-4.975558)
+    assert result["memory"]["capacity_headroom_gib"] == pytest.approx(-4.882315)
 
 
 def test_invalid_process_grid_fails_closed() -> None:

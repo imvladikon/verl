@@ -21,6 +21,7 @@ EXPECTED_SURGERY_POLICY_PARAMETERS = 8_763_269_120
 SURGERY_MLA_R16_PARAMETERS = 13_608_960
 SURGERY_ANCHOR_LAYERS = 10
 SURGERY_ANCHOR_SEQUENCE_LENGTH = 768
+CONSERVATIVE_ADAPTER_BYTES_PER_PARAMETER = 18
 # Worst cumulative PyTorch allocation from the qualified 33-step locked-mixture
 # run.  The previous 20.328-GiB anchor came from a two-step seq768 bucket gate
 # and understated the largest allocation already observed with the same model,
@@ -251,7 +252,9 @@ def estimate(
     include_output_layer: bool = False,
     sequence_length: int | None = None,
     base_bytes_per_parameter: int = 2,
-    conservative_adapter_bytes_per_parameter: int = 16,
+    conservative_adapter_bytes_per_parameter: int = (
+        CONSERVATIVE_ADAPTER_BYTES_PER_PARAMETER
+    ),
 ) -> dict[str, Any]:
     require(tp > 0 and ep > 0 and etp > 0, "TP, EP, and ETP must be positive")
     breakdown = parameter_breakdown(config)
@@ -287,7 +290,8 @@ def estimate(
         "base_local_bf16_gib": round(base_bytes / GIB, 6),
         "lora": asdict(adapter),
         "lora_global_bf16_mib": round(adapter.global_parameters * 2 / MIB, 6),
-        "lora_local_16_byte_upper_gib": round(adapter_upper_bytes / GIB, 6),
+        "adapter_state_bytes_per_parameter": conservative_adapter_bytes_per_parameter,
+        "lora_local_conservative_upper_gib": round(adapter_upper_bytes / GIB, 6),
         "static_upper_gib": round(static_upper_bytes / GIB, 6),
         "not_included": [
             "activations",

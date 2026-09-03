@@ -252,7 +252,7 @@ def main() -> None:
         "training_steps": trainer["total_training_steps"],
         "max_length": args.expected_max_length,
         "bf16_adapter_mib": round(trainable * 2 / 2**20, 3),
-        "unsharded_16_byte_bundle_gib": round(trainable * 16 / 2**30, 3),
+        "unsharded_18_byte_bundle_gib": round(trainable * 18 / 2**30, 3),
         "memory": memory,
         "full_model_runtime": None,
         "required_prior_gates": {

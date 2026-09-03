@@ -130,8 +130,8 @@ def analyze_topology(
         "minimum_additional_headroom_gib": minimum_additional_headroom_gib,
         "memory": {
             "base_local_bf16_gib": memory["base_local_bf16_gib"],
-            "adapter_local_16_byte_upper_gib": memory[
-                "lora_local_16_byte_upper_gib"
+            "adapter_local_conservative_upper_gib": memory[
+                "lora_local_conservative_upper_gib"
             ],
             "static_upper_gib": memory["static_upper_gib"],
             "projected_torch_allocated_gib": projected_gib,

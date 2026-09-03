@@ -62,11 +62,14 @@ still use our exact newer revision rather than silently inheriting the older
 card's claim.
 
 Our rank-16 profile has 106,149,888 trainable parameters over the 78 policy
-layers. That is 202.47 MiB for BF16 adapter weights and 1.582 GiB for a
-conservative unsharded 16-byte-per-parameter training bundle. Under our TP8
-layout, Megatron replicates the q/kv down-projection factors but shards the
-other three adapters: each rank holds 29,552,640 adapter parameters, or 0.440
-GiB under the stricter 16-byte-per-parameter upper estimate. If the separate
+layers. That is 202.47 MiB for BF16 adapter weights and 1.780 GiB for a
+conservative unsharded 18-byte-per-parameter training bundle. Megatron's
+documented BF16/FP32-gradient formula is `6 + 12/d` bytes per trainable
+parameter with distributed-optimizer DP size `d`; 18 bytes is exact for DP1
+and remains a conservative bound for the larger candidate grids. Under our
+TP8 layout, Megatron replicates the q/kv down-projection factors but shards the
+other three adapters: each rank holds 29,552,640 adapter parameters, or 0.495
+GiB under that bound. If the separate
 MTP layer is enabled and matched too, the count becomes 107,510,784. The
 current VERL quality profile deliberately disables MTP, as does the surgery
 fixture; MTP needs its own gate.

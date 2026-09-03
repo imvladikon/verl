@@ -565,24 +565,26 @@ parameters. It exactly reproduces both the official 743,377,000,704-policy
 parameter count and the per-rank numel observed in our TP2 and EP2 surgery
 runs. At TP8/EP32/ETP1 each rank holds 26,351,163,648 base parameters
 (`49.083 GiB` BF16) and 29,552,640 rank-16 adapter parameters. A conservative
-16-byte adapter-state estimate makes the static total `49.523 GiB` per GPU.
+18-byte adapter-state estimate makes the static total `49.578 GiB` per GPU.
+This uses Megatron's documented BF16/FP32-gradient DP1 bound; distributed
+optimizer sharding only reduces it when dense DP is greater than one.
 
 For W32/TP8/EP32, scaling the worst measured 9B locked-mixture allocation
 (`21.218 GiB`, stable from step 3 through step 33) by policy layers and tokens
-projects `86.126 GiB` PyTorch allocated. The estimator reports a deliberately
-padded `112.428 GiB` planning envelope
+projects `85.983 GiB` PyTorch allocated. The estimator reports a deliberately
+padded `112.186 GiB` planning envelope
 (static state plus 1.5x the projected non-static residual and 8 GiB for
 non-PyTorch CUDA and communication workspaces). At seq768, the corresponding
-envelopes are `238.990 GiB` for
-W8/TP8/EP8 and `154.615 GiB` for W16/TP8/EP16. Consequently W8 is a candidate
+envelopes are `238.748 GiB` for
+W8/TP8/EP8 and `154.373 GiB` for W16/TP8/EP16. Consequently W8 is a candidate
 at measured 270 GiB, W16 is rejected at 141 GiB, and W32 is a candidate at
 141 GiB. These are analytic dispositions, not runtime proofs: conversion
 staging, allocator behavior, collectives, and the real 78-layer DSA schedule
 can differ. They authorize only a guarded first qualification attempt.
 
-For the available 80-GiB allocation, W128/TP8/EP128 has 17.883 GiB of static
+For the available 80-GiB allocation, W128/TP8/EP128 has 17.938 GiB of static
 BF16 model and rank-16 MLA adapter state per GPU. The measured-surgery
-projection is 54.486 GiB and the padded planning envelope is 80.787 GiB. It is
+projection is 54.343 GiB and the padded planning envelope is 80.545 GiB. It is
 therefore `REJECT-ENVELOPE` at seq768 even before the separate 8-GiB minimum
 post-envelope headroom is enforced. Use this grid only after a shorter
 sequence, DSA-safe recomputation, context parallelism, or another memory

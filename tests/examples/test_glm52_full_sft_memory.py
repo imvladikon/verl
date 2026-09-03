@@ -156,14 +156,17 @@ def test_full_tp8_ep32_static_estimate() -> None:
     assert result["base_local_parameters"] == 26_351_163_648
     assert result["base_local_bf16_gib"] == pytest.approx(49.082867, abs=1e-6)
     assert result["lora"]["local_parameters"] == 29_552_640
-    assert result["lora_local_16_byte_upper_gib"] == pytest.approx(0.440369, abs=1e-6)
-    assert result["static_upper_gib"] == pytest.approx(49.523236, abs=1e-6)
+    assert result["adapter_state_bytes_per_parameter"] == 18
+    assert result["lora_local_conservative_upper_gib"] == pytest.approx(
+        0.495415, abs=1e-6
+    )
+    assert result["static_upper_gib"] == pytest.approx(49.578282, abs=1e-6)
     projection = result["empirical_activation_projection"]
     assert projection["depth_token_scale"] == pytest.approx(7.8)
     assert projection["projected_torch_allocated_gib"] == pytest.approx(
-        86.126332, abs=1e-6
+        85.983659, abs=1e-6
     )
-    assert projection["planning_envelope_gib"] == pytest.approx(112.427881, abs=1e-6)
+    assert projection["planning_envelope_gib"] == pytest.approx(112.186347, abs=1e-6)
     assert projection["runtime_proof"] is False
 
 
@@ -180,16 +183,16 @@ def test_full_tp8_ep32_mla_lm_head_static_estimate() -> None:
     assert result["lora"]["global_parameters"] == 108_726_272
     assert result["lora"]["local_parameters"] == 29_874_688
     assert result["lora"]["output_layer_parameters"] == 2_576_384
-    assert result["lora_local_16_byte_upper_gib"] == pytest.approx(
-        0.445168, abs=1e-6
+    assert result["lora_local_conservative_upper_gib"] == pytest.approx(
+        0.500813, abs=1e-6
     )
-    assert result["static_upper_gib"] == pytest.approx(49.528035, abs=1e-6)
+    assert result["static_upper_gib"] == pytest.approx(49.583681, abs=1e-6)
     projection = result["empirical_activation_projection"]
     assert projection["projected_torch_allocated_gib"] == pytest.approx(
-        86.131131, abs=1e-6
+        85.989058, abs=1e-6
     )
     assert projection["planning_envelope_gib"] == pytest.approx(
-        112.432679, abs=1e-6
+        112.191746, abs=1e-6
     )
 
 
