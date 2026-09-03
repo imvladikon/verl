@@ -59,6 +59,7 @@ from verl.utils.fsdp_utils import (
     offload_fsdp_model_to_cpu,
     offload_fsdp_optimizer,
     replace_lora_wrapper,
+    restore_fsdp1_no_shard_frozen_param_views,
 )
 from verl.utils.model import convert_weight_keys, extract_multi_modal_inputs
 from verl.utils.py_functional import convert_to_regular_types
@@ -777,6 +778,9 @@ class FSDPEngine(BaseEngine):
                         # full-length nested tensors across the mini-batch (∝ ppo_mini_batch * rollout_n) → OOM.
                         # Specialized callers such as Tinker may opt in when their response requires these outputs.
                         meta_info.pop("model_output", None)
+
+            if not forward_only:
+                restore_fsdp1_no_shard_frozen_param_views(self.module)
 
             output_lst.append(meta_info)
 

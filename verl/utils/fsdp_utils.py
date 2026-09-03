@@ -30,6 +30,7 @@ from packaging import version
 from peft.utils.save_and_load import get_peft_model_state_dict
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import ShardingStrategy
 from torch.distributed.fsdp._runtime_utils import _lazy_init
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy, transformer_auto_wrap_policy
 from transformers.trainer_pt_utils import get_module_class_from_name
@@ -235,6 +236,50 @@ def load_fsdp_model_to_gpu(model: FSDP):
 def load_fsdp2_model_to_gpu(model):
     device = get_device_id()
     model.to(device, non_blocking=True)
+
+
+@torch.no_grad()
+def restore_fsdp1_no_shard_frozen_param_views(model: FSDP) -> None:
+    """Restore frozen FSDP1 original parameters after a backward pass.
+
+    FSDP1 normally restores original ``nn.Parameter`` views in its
+    post-backward reshard hook. A fully frozen handle has no parameter
+    gradient on which to register that hook. PyTorch's frozen-handle fallback
+    covers sharded handles, but its already-resharded check can skip the view
+    restoration for ``NO_SHARD``. If another micro-batch starts first, FSDP's
+    writeback path may permanently replace its saved parameter objects with
+    temporary tensor views.
+
+    Run this immediately after each completed backward. It is deliberately a
+    no-op for FSDP2 and every sharded strategy, so real multi-rank FSDP remains
+    on PyTorch's native reshard path.
+    """
+    if fsdp_version(model) != 1:
+        return
+
+    _lazy_init(model, model)
+    if not getattr(model, "_use_orig_params", False):
+        return
+
+    for handle in model._all_handles:
+        if handle.uses_sharded_strategy or not handle._use_orig_params or handle.flat_param.requires_grad:
+            continue
+
+        registrations = [info.module._parameters.get(info.param_name) for info in handle.flat_param._param_infos]
+        if all(isinstance(param, nn.Parameter) for param in registrations):
+            continue
+
+        saved_params = handle.flat_param._params
+        if saved_params is None or not all(isinstance(param, nn.Parameter) for param in saved_params):
+            raise RuntimeError(
+                "FSDP1 NO_SHARD lost the saved nn.Parameter objects for a frozen handle. "
+                "Restore frozen parameter views immediately after every backward pass."
+            )
+        handle._use_sharded_views()
+
+        registrations = [info.module._parameters.get(info.param_name) for info in handle.flat_param._param_infos]
+        if not all(isinstance(param, nn.Parameter) for param in registrations):
+            raise RuntimeError("FSDP1 NO_SHARD failed to restore frozen original parameter views")
 
 
 @torch.no_grad()
@@ -678,47 +723,130 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
         # their params are not gathered here and again when their own unit is visited.
         nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
 
-        if not any(
-            "lora_" in n
-            for n, _ in submodule.named_parameters()
-            if not any(n.startswith(f"{nn}.") for nn in nested_fsdp_names)
-        ):
+        direct_param_names = [
+            f"{clean_prefix}.{name.replace('_fsdp_wrapped_module.', '')}"
+            for name, _ in submodule.named_parameters()
+            if not any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+        ]
+        if "lora_" not in clean_prefix and not any("lora_" in name for name in direct_param_names):
             continue
 
+        previous_is_root = getattr(submodule, "_is_root", None)
         if is_fsdp1:
             submodule._is_root = True
         summon_ctx = FSDP.summon_full_params(submodule, writeback=False) if is_fsdp1 else nullcontext()
 
-        with summon_ctx:
-            sub_state_dict = {
-                n: p
-                for n, p in submodule.named_parameters()
-                if not any(n.startswith(f"{nn}.") for nn in nested_fsdp_names)
-            }
-            sub_lora_params = get_peft_model_state_dict(peft_model, state_dict=sub_state_dict)
-            if not sub_lora_params:
-                continue
-            sub_lora_params = {
-                f"{clean_prefix}.{key}": (
-                    param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+        try:
+            with summon_ctx:
+                # With ``use_orig_params=False``, names outside the summon
+                # context end in ``_flat_param``. Re-read them only after
+                # FSDP has exposed the original adapter parameters.
+                direct_params = {
+                    f"{clean_prefix}.{name.replace('_fsdp_wrapped_module.', '')}": param
+                    for name, param in submodule.named_parameters()
+                    if not any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+                }
+                # ``named_parameters()`` is relative to this FSDP unit. A leaf
+                # unit around ``lora_A.default`` therefore exposes only
+                # ``weight``; PEFT cannot recognize it as an adapter unless the
+                # global prefix is restored before filtering the state dict.
+                sub_lora_params = get_peft_model_state_dict(peft_model, state_dict=direct_params)
+                lora_params.update(
+                    {
+                        key: (
+                            param.full_tensor().detach().cpu()
+                            if hasattr(param, "full_tensor")
+                            else param.detach().cpu()
+                        )
+                        for key, param in sub_lora_params.items()
+                    }
                 )
-                for key, param in sub_lora_params.items()
-            }
-            lora_params.update(sub_lora_params)
+        finally:
             if is_fsdp1:
-                submodule._is_root = False
+                submodule._is_root = previous_is_root
         get_torch_device().empty_cache()
 
     return lora_params
 
 
-def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool) -> OrderedDict:
+def _get_peft_state_from_named_parameters(peft_model, named_parameters) -> OrderedDict:
+    """Filter an existing parameter iterator without materializing the base state dict."""
+    parameter_state = OrderedDict(named_parameters)
+    return OrderedDict(get_peft_model_state_dict(peft_model, state_dict=parameter_state))
+
+
+@torch.no_grad()
+def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) -> None:
+    """Load a full PEFT adapter state one FSDP1 unit at a time.
+
+    ``layered_summon_lora_params`` returns PEFT-format names with the arbitrary
+    adapter name removed. Re-create the same name mapping for each adapter FSDP
+    unit, copy only that unit's tensors, and let ``summon_full_params`` write
+    the updated full parameters back to their local shards.
+    """
+    if fsdp_version(fsdp_module) != 1:
+        raise NotImplementedError("Layered LoRA checkpoint loading currently supports FSDP1 only")
+
+    peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
+    is_unsharded = getattr(fsdp_module, "sharding_strategy", None) == ShardingStrategy.NO_SHARD
+    if is_unsharded and getattr(fsdp_module, "_use_orig_params", False):
+        current_params = _get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters())
+        missing = set(lora_params).difference(current_params)
+        if missing:
+            raise ValueError(f"LoRA checkpoint contains unknown adapter parameters: {sorted(missing)}")
+        for name, value in lora_params.items():
+            current_params[name].copy_(value.to(device=current_params[name].device, dtype=current_params[name].dtype))
+        return
+
+    loaded = set()
+    for name, submodule in fsdp_module.named_modules():
+        if name == "" or fsdp_version(submodule) == 0:
+            continue
+        clean_prefix = name.replace("_fsdp_wrapped_module.", "")
+        nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
+        direct_param_names = [
+            f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}"
+            for param_name, _ in submodule.named_parameters()
+            if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+        ]
+        if "lora_" not in clean_prefix and not any("lora_" in param_name for param_name in direct_param_names):
+            continue
+
+        previous_is_root = getattr(submodule, "_is_root", None)
+        submodule._is_root = True
+        try:
+            with FSDP.summon_full_params(submodule, recurse=False, writeback=True):
+                direct_params = {
+                    f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}": param
+                    for param_name, param in submodule.named_parameters()
+                    if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+                }
+                current_params = _get_peft_state_from_named_parameters(peft_model, direct_params.items())
+                for param_name in sorted(current_params.keys() & lora_params.keys()):
+                    current_param = current_params[param_name]
+                    current_param.copy_(
+                        lora_params[param_name].to(device=current_param.device, dtype=current_param.dtype)
+                    )
+                    loaded.add(param_name)
+        finally:
+            submodule._is_root = previous_is_root
+        get_torch_device().empty_cache()
+
+    missing = set(lora_params).difference(loaded)
+    if missing:
+        raise ValueError(f"LoRA checkpoint contains unknown adapter parameters: {sorted(missing)}")
+
+
+def collect_lora_params(
+    module: FSDP,
+    layered_summon: bool,
+    base_sync_done: bool,
+    allow_full_summon_fallback: bool = True,
+) -> OrderedDict:
     """
     collect lora params or full params if base model is not ready in vllm
     work with if isinstance(self.module._fsdp_wrapped_module, PeftModel)
     """
-    from peft.utils.save_and_load import get_peft_model_state_dict
-
     lora_params = OrderedDict()
     peft_model = getattr(module, "_fsdp_wrapped_module", module)
     if fsdp_version(module) > 0:
@@ -728,8 +856,25 @@ def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool
                     "To use layered_summon, you must make sure base-model is preloaded in vllm, e.g. let "
                     "rollout.load_format=safetensors"
                 )
-            lora_params = layered_summon_lora_params(module)
+            # PyTorch turns FSDP1 into NO_SHARD at world size 1. There is
+            # nothing to all-gather in that mode, and summon_full_params with
+            # offload_to_cpu=True is explicitly unsupported. Materialize only
+            # the small adapter state directly instead.
+            is_unsharded_fsdp1 = (
+                fsdp_version(module) == 1 and getattr(module, "sharding_strategy", None) == ShardingStrategy.NO_SHARD
+            )
+            if is_unsharded_fsdp1 and getattr(module, "_use_orig_params", False):
+                peft_state = _get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters())
+                lora_params = {
+                    name: param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+                    for name, param in peft_state.items()
+                }
+                get_torch_device().empty_cache()
+            else:
+                lora_params = layered_summon_lora_params(module)
             if not lora_params:
+                if not allow_full_summon_fallback:
+                    return lora_params
                 import logging
 
                 logging.getLogger(__name__).warning("layered_summon returned empty, falling back to full summon")
