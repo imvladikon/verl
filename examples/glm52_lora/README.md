@@ -55,6 +55,13 @@ same ten donor layers and the same 16 experts in every retained MoE layer.
    examples/glm52_lora/run_surgery_grpo_megatron_sglang.sh
    ```
 
+   The one-GPU gate starts a private Ray instance under a short socket path,
+   disables its dashboard frontend, and defaults to 8 CPUs, a 4-GiB object
+   store, and an 1800-second SGLang watchdog for first-request JIT. Override
+   these with `RAY_TMPDIR`, `RAY_NUM_CPUS`,
+   `RAY_OBJECT_STORE_MEMORY_BYTES`, and `SGLANG_WATCHDOG_SECONDS`; the script
+   validates every value before starting Ray.
+
 5. Verify the final PPO actor adapter and its Megatron dist checkpoint:
 
    ```bash

@@ -18,13 +18,27 @@ rank=${LORA_RANK:-16}
 alpha=${LORA_ALPHA:-32}
 steps=${STEPS:-2}
 rollout_memory=${ROLLOUT_GPU_MEMORY_UTILIZATION:-0.30}
-ray_tmpdir=${RAY_TMPDIR:-/tmp/glm52-lora-ray-${UID}-$$}
+ray_num_cpus=${RAY_NUM_CPUS:-8}
+ray_object_store_memory_bytes=${RAY_OBJECT_STORE_MEMORY_BYTES:-4294967296}
+sglang_watchdog_seconds=${SGLANG_WATCHDOG_SECONDS:-1800}
+ray_id=$(printf '%s:%s' "${UID}" "$$" | sha256sum | cut -c1-12)
+ray_tmpdir=${RAY_TMPDIR:-/tmp/g52r-${ray_id}}
 config_only=${CONFIG_ONLY:-0}
 
 source "${script_dir}/stack_env.sh"
 
 if (( rank <= 0 || alpha <= 0 || steps < 2 )); then
   echo "LORA_RANK/LORA_ALPHA must be positive and STEPS must be at least 2" >&2
+  exit 2
+fi
+if [[ ! "${ray_num_cpus}" =~ ^[1-9][0-9]*$ ]] || \
+   [[ ! "${ray_object_store_memory_bytes}" =~ ^[1-9][0-9]*$ ]] || \
+   [[ ! "${sglang_watchdog_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Ray CPU/object-store and SGLang watchdog limits must be positive integers" >&2
+  exit 2
+fi
+if [[ "${ray_tmpdir}" != /* ]] || (( ${#ray_tmpdir} > 32 )); then
+  echo "RAY_TMPDIR must be absolute and at most 32 bytes" >&2
   exit 2
 fi
 if [[ "${config_only}" != 1 && ! -d "${adapter_ckpt}" ]]; then
@@ -171,4 +185,9 @@ fi
   trainer.default_local_dir="${run_dir}" \
   trainer.resume_mode=disable \
   ray_kwargs.ray_init.runtime_env.py_executable=null \
+  "+ray_kwargs.ray_init._temp_dir=${ray_tmpdir}" \
+  +ray_kwargs.ray_init.include_dashboard=false \
+  "+ray_kwargs.ray_init.num_cpus=${ray_num_cpus}" \
+  "+ray_kwargs.ray_init.object_store_memory=${ray_object_store_memory_bytes}" \
+  "+actor_rollout_ref.rollout.engine_kwargs.sglang.watchdog_timeout=${sglang_watchdog_seconds}" \
   "$@"
