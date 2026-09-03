@@ -46,7 +46,9 @@ full checkpoint and held-out IDs:
    metrics. Never use Cyrillic character ratio as a semantic-quality proxy.
 5. Compare Markdown validity and accidental-Han rates with confidence
    intervals and preserve every raw output for audit.
-6. Reject the adapter if semantic quality regresses even when the two
+6. Require paired semantic non-inferiority on every non-Russian retention row,
+   including legitimate Chinese requests.
+7. Reject the adapter if semantic quality regresses even when the two
    formatting constraints improve.
 
 The official base checkpoint is available through several Hub inference

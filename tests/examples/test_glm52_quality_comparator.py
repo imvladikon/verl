@@ -18,6 +18,8 @@ def _row(
     semantic_score: float | None,
     *,
     require_markdown: bool = False,
+    requested_language: str = "ru",
+    allow_han: bool = False,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "id": example_id,
@@ -32,8 +34,8 @@ def _row(
         "completion": completion,
         "completion_token_count": 12,
         "contract": {
-            "requested_language": "ru",
-            "allow_han": False,
+            "requested_language": requested_language,
+            "allow_han": allow_han,
             "require_markdown": require_markdown,
             "required_markdown_blocks": ["heading", "list"] if require_markdown else [],
         },
@@ -73,6 +75,7 @@ def test_comparator_passes_only_paired_three_target_improvement() -> None:
         "russian_semantic_quality": "PASS",
         "required_markdown_validity": "PASS",
         "accidental_han": "PASS",
+        "non_russian_semantic_retention": "NOT_APPLICABLE",
     }
     assert result["base_required_markdown_defects"] == 2
     assert result["adapter_required_markdown_defects"] == 0
@@ -92,6 +95,7 @@ def test_comparator_stays_pending_without_semantics_or_reproduced_defects() -> N
         "russian_semantic_quality": "PENDING",
         "required_markdown_validity": "NOT_REPRODUCED",
         "accidental_han": "NOT_REPRODUCED",
+        "non_russian_semantic_retention": "NOT_APPLICABLE",
     }
     assert result["paired_russian_semantic_coverage"] == 0.0
 
@@ -104,6 +108,125 @@ def test_comparator_reports_semantic_regression_as_failure() -> None:
 
     assert result["status"] == "FAIL"
     assert result["target_status"]["russian_semantic_quality"] == "FAIL"
+
+
+def test_comparator_requires_legitimate_chinese_semantic_retention() -> None:
+    base = [
+        _row("markdown", "сломанный markdown", 0.3, require_markdown=True),
+        _row("han", "Русский текст 中", 0.5),
+        _row(
+            "zh-retention",
+            "这是一个正确的中文回答。",
+            0.9,
+            requested_language="zh",
+            allow_han=True,
+        ),
+    ]
+    adapter = [
+        _adapter(
+            _row(
+                "markdown",
+                "## Ответ\n\n- Исправлено.",
+                0.6,
+                require_markdown=True,
+            )
+        ),
+        _adapter(_row("han", "Русский текст.", 0.8)),
+        _adapter(
+            _row(
+                "zh-retention",
+                "Нерелевантный русский ответ.",
+                0.1,
+                requested_language="zh",
+                allow_han=True,
+            )
+        ),
+    ]
+
+    result, _ = compare_rows(base, adapter, bootstrap_samples=100)
+
+    assert result["status"] == "FAIL"
+    assert result["target_status"]["non_russian_semantic_retention"] == "FAIL"
+    assert result["paired_retention_semantic_coverage"] == 1.0
+
+
+def test_comparator_accepts_noninferior_chinese_retention() -> None:
+    base = [
+        _row("markdown", "сломанный markdown", 0.3, require_markdown=True),
+        _row("han", "Русский текст 中", 0.5),
+        _row(
+            "zh-retention",
+            "这是一个正确的中文回答。",
+            0.8,
+            requested_language="zh",
+            allow_han=True,
+        ),
+    ]
+    adapter = [
+        _adapter(
+            _row(
+                "markdown",
+                "## Ответ\n\n- Исправлено.",
+                0.6,
+                require_markdown=True,
+            )
+        ),
+        _adapter(_row("han", "Русский текст.", 0.8)),
+        _adapter(
+            _row(
+                "zh-retention",
+                "这是一个同样正确的中文回答。",
+                0.8,
+                requested_language="zh",
+                allow_han=True,
+            )
+        ),
+    ]
+
+    result, _ = compare_rows(base, adapter, bootstrap_samples=100)
+
+    assert result["status"] == "PASS"
+    assert result["target_status"]["non_russian_semantic_retention"] == "PASS"
+
+
+def test_comparator_stays_pending_without_chinese_retention_scores() -> None:
+    base = [
+        _row("markdown", "сломанный markdown", 0.3, require_markdown=True),
+        _row("han", "Русский текст 中", 0.5),
+        _row(
+            "zh-retention",
+            "这是一个正确的中文回答。",
+            None,
+            requested_language="zh",
+            allow_han=True,
+        ),
+    ]
+    adapter = [
+        _adapter(
+            _row(
+                "markdown",
+                "## Ответ\n\n- Исправлено.",
+                0.6,
+                require_markdown=True,
+            )
+        ),
+        _adapter(_row("han", "Русский текст.", 0.8)),
+        _adapter(
+            _row(
+                "zh-retention",
+                "这是一个同样正确的中文回答。",
+                None,
+                requested_language="zh",
+                allow_han=True,
+            )
+        ),
+    ]
+
+    result, _ = compare_rows(base, adapter, bootstrap_samples=100)
+
+    assert result["status"] == "PENDING"
+    assert result["target_status"]["non_russian_semantic_retention"] == "PENDING"
+    assert result["paired_retention_semantic_coverage"] == 0.0
 
 
 @pytest.mark.parametrize(

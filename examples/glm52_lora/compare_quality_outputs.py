@@ -84,7 +84,7 @@ def _require_equal_pair_contract(example_id: str, base: dict[str, Any], adapter:
     for label, prediction in (("base", base), ("adapter", adapter)):
         generation = prediction.get("generation")
         if not isinstance(generation, dict):
-            raise ValueError(f"{example_id}: {label} generation provenance is missing")
+            raise TypeError(f"{example_id}: {label} generation provenance is missing")
         if generation.get("variant") != label:
             raise ValueError(f"{example_id}: {label} generation variant is invalid")
         if generation.get("runtime_manifest_sha256") != runtime_pair_hash:
@@ -111,6 +111,22 @@ def _metric_status(
     return "PENDING"
 
 
+def _noninferiority_status(
+    metric: dict[str, float | int] | None,
+    *,
+    margin: float,
+) -> str:
+    if metric is None:
+        return "PENDING"
+    ci95_low = float(metric["ci95_low"])
+    ci95_high = float(metric["ci95_high"])
+    if ci95_high < -margin:
+        return "FAIL"
+    if ci95_low >= -margin:
+        return "PASS"
+    return "PENDING"
+
+
 def compare_rows(
     base_rows: list[dict[str, Any]],
     adapter_rows: list[dict[str, Any]],
@@ -119,11 +135,17 @@ def compare_rows(
     bootstrap_seed: int = 52,
     required_semantic_coverage: float = 1.0,
     semantic_noninferiority_margin: float = 0.02,
+    required_retention_semantic_coverage: float = 1.0,
+    retention_noninferiority_margin: float = 0.02,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not 0.0 <= required_semantic_coverage <= 1.0:
         raise ValueError("required semantic coverage must be in [0, 1]")
     if semantic_noninferiority_margin < 0.0:
         raise ValueError("semantic noninferiority margin must be nonnegative")
+    if not 0.0 <= required_retention_semantic_coverage <= 1.0:
+        raise ValueError("required retention semantic coverage must be in [0, 1]")
+    if retention_noninferiority_margin < 0.0:
+        raise ValueError("retention noninferiority margin must be nonnegative")
 
     base_index = _index_rows(base_rows, "base")
     adapter_index = _index_rows(adapter_rows, "adapter")
@@ -142,12 +164,14 @@ def compare_rows(
     constraint_differences: list[float] = []
     russian_script_differences: list[float] = []
     semantic_differences: list[float] = []
+    retention_semantic_differences: list[float] = []
     markdown_improvements: list[float] = []
     han_example_improvements: list[float] = []
     han_count_improvements: list[float] = []
     han_per_1000_token_improvements: list[float] = []
     paired_details: list[dict[str, Any]] = []
     russian_count = 0
+    retention_count = 0
     base_markdown_defects = 0
     adapter_markdown_defects = 0
     base_han_defects = 0
@@ -179,6 +203,16 @@ def compare_rows(
                 semantic_delta = float(adapter["semantic_score"]) - float(base["semantic_score"])
                 semantic_differences.append(semantic_delta)
                 detail["semantic_score_adapter_minus_base"] = semantic_delta
+        else:
+            retention_count += 1
+            if base.get("semantic_score") is not None:
+                retention_delta = float(adapter["semantic_score"]) - float(
+                    base["semantic_score"]
+                )
+                retention_semantic_differences.append(retention_delta)
+                detail["retention_semantic_score_adapter_minus_base"] = (
+                    retention_delta
+                )
 
         if contract.require_markdown or contract.required_blocks:
             base_valid = bool(base_detail["markdown_valid"])
@@ -221,6 +255,9 @@ def compare_rows(
         "constraint_score_adapter_minus_base": bootstrap(constraint_differences),
         "russian_script_score_adapter_minus_base": bootstrap(russian_script_differences),
         "russian_semantic_score_adapter_minus_base": bootstrap(semantic_differences),
+        "non_russian_semantic_score_adapter_minus_base": bootstrap(
+            retention_semantic_differences
+        ),
         "required_markdown_valid_base_to_adapter": bootstrap(markdown_improvements),
         "accidental_han_example_base_to_adapter": bootstrap(han_example_improvements),
         "accidental_han_count_base_to_adapter": bootstrap(han_count_improvements),
@@ -234,6 +271,21 @@ def compare_rows(
     )
     if semantic_coverage < required_semantic_coverage:
         semantic_status = "PENDING"
+
+    retention_semantic_coverage = (
+        len(retention_semantic_differences) / retention_count
+        if retention_count
+        else 0.0
+    )
+    if retention_count == 0:
+        retention_status = "NOT_APPLICABLE"
+    else:
+        retention_status = _noninferiority_status(
+            metrics["non_russian_semantic_score_adapter_minus_base"],
+            margin=retention_noninferiority_margin,
+        )
+        if retention_semantic_coverage < required_retention_semantic_coverage:
+            retention_status = "PENDING"
 
     if base_markdown_defects == 0:
         markdown_status = "NOT_REPRODUCED"
@@ -249,10 +301,14 @@ def compare_rows(
         "russian_semantic_quality": semantic_status,
         "required_markdown_validity": markdown_status,
         "accidental_han": han_status,
+        "non_russian_semantic_retention": retention_status,
     }
     if "FAIL" in target_status.values():
         overall_status = "FAIL"
-    elif all(status == "PASS" for status in target_status.values()):
+    elif all(
+        status in {"PASS", "NOT_APPLICABLE"}
+        for status in target_status.values()
+    ):
         overall_status = "PASS"
     else:
         overall_status = "PENDING"
@@ -266,6 +322,11 @@ def compare_rows(
         "paired_russian_semantic_coverage": semantic_coverage,
         "required_semantic_coverage": required_semantic_coverage,
         "semantic_noninferiority_margin": semantic_noninferiority_margin,
+        "retention_example_count": retention_count,
+        "paired_retention_semantic_count": len(retention_semantic_differences),
+        "paired_retention_semantic_coverage": retention_semantic_coverage,
+        "required_retention_semantic_coverage": required_retention_semantic_coverage,
+        "retention_noninferiority_margin": retention_noninferiority_margin,
         "base_required_markdown_defects": base_markdown_defects,
         "adapter_required_markdown_defects": adapter_markdown_defects,
         "base_accidental_han_examples": base_han_defects,
@@ -288,6 +349,12 @@ def main() -> None:
     parser.add_argument("--bootstrap-seed", type=int, default=52)
     parser.add_argument("--required-semantic-coverage", type=float, default=1.0)
     parser.add_argument("--semantic-noninferiority-margin", type=float, default=0.02)
+    parser.add_argument(
+        "--required-retention-semantic-coverage", type=float, default=1.0
+    )
+    parser.add_argument(
+        "--retention-noninferiority-margin", type=float, default=0.02
+    )
     args = parser.parse_args()
 
     result, details = compare_rows(
@@ -297,6 +364,10 @@ def main() -> None:
         bootstrap_seed=args.bootstrap_seed,
         required_semantic_coverage=args.required_semantic_coverage,
         semantic_noninferiority_margin=args.semantic_noninferiority_margin,
+        required_retention_semantic_coverage=(
+            args.required_retention_semantic_coverage
+        ),
+        retention_noninferiority_margin=args.retention_noninferiority_margin,
     )
     result["base_predictions_sha256"] = _sha256(args.base_predictions)
     result["adapter_predictions_sha256"] = _sha256(args.adapter_predictions)

@@ -187,7 +187,7 @@ def test_contract_hash_and_output_overwrite_fail_closed(tmp_path: Path) -> None:
     require_absent([output], overwrite=True)
 
 
-def test_adjudicated_scores_feed_the_three_target_comparator(tmp_path: Path) -> None:
+def test_adjudicated_scores_feed_all_quality_and_retention_gates(tmp_path: Path) -> None:
     key = b"0123456789abcdef"
     examples = [
         (
@@ -216,6 +216,19 @@ def test_adjudicated_scores_feed_the_three_target_comparator(tmp_path: Path) -> 
                 "required_markdown_blocks": [],
             },
         ),
+        (
+            "zh-retention",
+            "请用中文回答。",
+            "这是同样正确的中文回答。",
+            "这是正确的中文回答。",
+            "这是同样正确的中文回答。",
+            {
+                "requested_language": "zh",
+                "allow_han": True,
+                "require_markdown": False,
+                "required_markdown_blocks": [],
+            },
+        ),
     ]
     contracts: dict[str, dict] = {}
     base: list[dict] = []
@@ -224,7 +237,11 @@ def test_adjudicated_scores_feed_the_three_target_comparator(tmp_path: Path) -> 
         source = {
             "id": example_id,
             "split": "validation",
-            "system": "Отвечай по-русски.",
+            "system": (
+                "请用中文回答。"
+                if contract["requested_language"] == "zh"
+                else "Отвечай по-русски."
+            ),
             "prompt": prompt,
             "response": reference,
             "prompt_sha256": prompt_sha256(prompt),
@@ -302,4 +319,5 @@ def test_adjudicated_scores_feed_the_three_target_comparator(tmp_path: Path) -> 
         "russian_semantic_quality": "PASS",
         "required_markdown_validity": "PASS",
         "accidental_han": "PASS",
+        "non_russian_semantic_retention": "PASS",
     }

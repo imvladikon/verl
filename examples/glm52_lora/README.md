@@ -456,7 +456,10 @@ hashes, decoding-contract hashes, the same exact runtime-manifest hash, and
 paired semantic-score coverage. It programmatically rejects unproven or
 surgery-checkpoint output. It uses a deterministic paired bootstrap and
 remains `PENDING` unless all three target failures are reproduced in the base
-outputs and improve without semantic regression.
+outputs and improve without Russian semantic regression. When non-Russian
+retention rows are present, their semantic scores also require full paired
+coverage and non-inferiority; accidental-Han cleanup cannot pass by destroying
+legitimate Chinese ability.
 
 `quality_reward.py` is only the deterministic constraint component. It masks
 code, URLs and link destinations, permits Han only under an explicit Chinese,

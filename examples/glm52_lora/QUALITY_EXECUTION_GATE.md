@@ -171,8 +171,9 @@ recorded.
 Run `compare_quality_outputs.py` on the scored rows with identical IDs, prompt
 hashes, request-message hashes, decoding-contract hashes, and full semantic
 coverage. A result is accepted only when Russian semantic quality is
-non-inferior and both required-Markdown validity and accidental-Han improve.
-Missing semantic scores, a defect not reproduced in the base, or a confidence
-interval crossing the decision boundary remains `PENDING`, never `PASS`.
+non-inferior, both required-Markdown validity and accidental-Han improve, and
+the non-Russian retention slice is semantically non-inferior. Missing Russian
+or retention semantic scores, a defect not reproduced in the base, or a
+confidence interval crossing the decision boundary remains `PENDING`, never `PASS`.
 Choose the adapter on validation, then generate and review the untouched test
 split once with a separate blinding key.
