@@ -135,9 +135,9 @@ fi
   actor_rollout_ref.actor.megatron.optimizer_offload=true \
   +actor_rollout_ref.actor.megatron.override_transformer_config.dsa_kernel_backend=none \
   +actor_rollout_ref.actor.megatron.override_transformer_config.moe_router_dtype=fp32 \
-  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full \
-  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform \
-  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1 \
+  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=null \
+  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=null \
+  +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=null \
   actor_rollout_ref.rollout.name=sglang \
   actor_rollout_ref.rollout.mode=async \
   actor_rollout_ref.rollout.dtype=bfloat16 \

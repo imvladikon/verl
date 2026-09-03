@@ -69,6 +69,19 @@ same ten donor layers and the same 16 experts in every retained MoE layer.
      runs/glm52-lora-surgery-grpo-megatron-sglang/global_step_2/actor
    ```
 
+   Preserve and validate the step metrics, GPU/RSS telemetry, log hashes, and
+   the same actor checkpoint as one fail-closed record:
+
+   ```bash
+   python examples/glm52_lora/verify_surgery_grpo_run.py \
+     runs/glm52-lora-surgery-grpo-megatron-sglang \
+     --log /path/to/grpo.log --expected-steps 2
+   ```
+
+   For a run resumed from step 2 through step 3, add
+   `--expected-steps 3 --first-step 3 --resumed-from-step 2`. The verifier
+   requires the log to start at `2/3`, rather than silently restarting.
+
 ## TP2 save/resume gate
 
 Use two independently audited free 80-GiB GPUs to exercise tensor and sequence

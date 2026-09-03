@@ -110,9 +110,9 @@ fi
   engine.optimizer_offload=false \
   +engine.override_transformer_config.dsa_kernel_backend=none \
   +engine.override_transformer_config.moe_router_dtype=fp32 \
-  +engine.override_transformer_config.recompute_granularity=full \
-  +engine.override_transformer_config.recompute_method=uniform \
-  +engine.override_transformer_config.recompute_num_layers=1 \
+  +engine.override_transformer_config.recompute_granularity=null \
+  +engine.override_transformer_config.recompute_method=null \
+  +engine.override_transformer_config.recompute_num_layers=null \
   optim.lr=2e-4 \
   optim.weight_decay=0.0 \
   trainer.default_local_dir="${run_dir}" \

@@ -25,6 +25,16 @@ def test_glm52_grpo_launcher_bounds_private_ray_and_cold_jit() -> None:
     assert "sglang_watchdog_seconds=${SGLANG_WATCHDOG_SECONDS:-1800}" in source
 
 
+def test_glm52_grpo_launcher_disables_uniform_layer_recompute() -> None:
+    source = LAUNCHER.read_text()
+
+    prefix = "+actor_rollout_ref.actor.megatron.override_transformer_config."
+    assert f"{prefix}recompute_granularity=null" in source
+    assert f"{prefix}recompute_method=null" in source
+    assert f"{prefix}recompute_num_layers=null" in source
+    assert f"{prefix}recompute_granularity=full" not in source
+
+
 def test_glm52_grpo_launcher_has_no_machine_home_or_snapshot_default() -> None:
     source = LAUNCHER.read_text()
 
