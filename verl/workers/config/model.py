@@ -146,6 +146,23 @@ class HFModelConfig(BaseConfig):
     mtp: MtpConfig = field(default_factory=MtpConfig)
 
     def __post_init__(self):
+        # Reject malformed LoRA configuration before model/tokenizer downloads.
+        # Besides producing the intended error, this keeps config validation
+        # independent of any machine-local model cache.
+        if self.target_modules is not None:
+            if not isinstance(self.target_modules, (str | list)):
+                raise TypeError(
+                    "target_modules must be a string or a list of strings, "
+                    f"but got {type(self.target_modules).__name__}"
+                )
+            if isinstance(self.target_modules, list):
+                for target_module in self.target_modules:
+                    if not isinstance(target_module, str):
+                        raise TypeError(
+                            "All elements in target_modules list must be strings, "
+                            f"but found {type(target_module).__name__}"
+                        )
+
         import_external_libs(self.external_lib)
 
         if self.hf_config_path is None:
@@ -242,20 +259,6 @@ class HFModelConfig(BaseConfig):
                 self.hf_config.mtp_num_hidden_layers = 0
             if hasattr(self.hf_config, "text_config") and hasattr(self.hf_config.text_config, "mtp_num_hidden_layers"):
                 self.hf_config.text_config.mtp_num_hidden_layers = 0
-
-        # Ensure target_modules is a str or list[str] (only if not None)
-        if self.target_modules is not None:
-            if not isinstance(self.target_modules, (str | list)):
-                raise TypeError(
-                    "target_modules must be a string or a list of strings, "
-                    f"but got {type(self.target_modules).__name__}"
-                )
-            if isinstance(self.target_modules, list):
-                for x in self.target_modules:
-                    if not isinstance(x, str):
-                        raise TypeError(
-                            f"All elements in target_modules list must be strings, but found {type(x).__name__}"
-                        )
 
     def get_processor(self):
         return self.processor if self.processor is not None else self.tokenizer
