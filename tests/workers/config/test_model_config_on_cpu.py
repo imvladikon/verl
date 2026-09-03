@@ -95,6 +95,19 @@ class TestHFModelConfigCPU:
         with pytest.raises(TypeError):
             OmegaConf.to_object(merged_config)
 
+    def test_exclude_modules_accepts_list_via_omegaconf(self):
+        cfg_from_dataclass = OmegaConf.structured(HFModelConfig)
+        cli_config = OmegaConf.create(
+            {
+                "path": self.model_path,
+                "exclude_modules": ["visual", "lm_head"],
+            }
+        )
+
+        merged = OmegaConf.merge(cfg_from_dataclass, cli_config)
+
+        assert list(merged.exclude_modules) == ["visual", "lm_head"]
+
     def test_disable_mtp_layers_covers_glm53_flash_nested_field(self):
         text_config = SimpleNamespace(num_nextn_predict_layers=1)
         hf_config = SimpleNamespace(text_config=text_config)

@@ -22,8 +22,9 @@ from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.fs import copy_to_local
 from verl.utils.import_utils import import_external_libs
 from verl.utils.model import get_generation_config, update_model_config
+from verl.workers.config.lora_adapter_plan import build_glm5_next_lora_adapter_plan
 
-__all__ = ["HFModelConfig", "MtpConfig"]
+__all__ = ["HFModelConfig", "MtpConfig", "build_glm5_next_lora_adapter_plan"]
 
 
 def _disable_mtp_layers(hf_config: Any) -> None:
@@ -95,6 +96,9 @@ class HFModelConfig(BaseConfig):
         "local_tokenizer_path",
         "mtp",
         "freeze_vision_tower",
+        "lora_adapter_plan",
+        "target_modules",
+        "exclude_modules",
     }
 
     path: str = MISSING
@@ -142,8 +146,9 @@ class HFModelConfig(BaseConfig):
     lora_alpha: int = 16
     target_modules: Optional[Any] = "all-linear"  # allow both "all-linear" and ["q_proj","k_proj"]
     target_parameters: Optional[list[str]] = None  # for lora adapter on nn.Parameter
+    lora_adapter_plan: Optional[dict[str, Any]] = None
 
-    exclude_modules: Optional[str] = None
+    exclude_modules: Optional[Any] = None  # allow a regex string or a list of module suffixes
 
     # megatron lora config
     lora: dict[str, Any] = field(default_factory=dict)
@@ -178,6 +183,19 @@ class HFModelConfig(BaseConfig):
                         raise TypeError(
                             "All elements in target_modules list must be strings, "
                             f"but found {type(target_module).__name__}"
+                        )
+        if self.exclude_modules is not None:
+            if not isinstance(self.exclude_modules, (str | list)):
+                raise TypeError(
+                    "exclude_modules must be a regex string or a list of strings, "
+                    f"but got {type(self.exclude_modules).__name__}"
+                )
+            if isinstance(self.exclude_modules, list):
+                for exclude_module in self.exclude_modules:
+                    if not isinstance(exclude_module, str):
+                        raise TypeError(
+                            "All elements in exclude_modules list must be strings, "
+                            f"but found {type(exclude_module).__name__}"
                         )
 
         import_external_libs(self.external_lib)
@@ -272,6 +290,25 @@ class HFModelConfig(BaseConfig):
         # GLM-5.3-Flash uses text_config.num_nextn_predict_layers.
         if not self.mtp.enable:
             _disable_mtp_layers(self.hf_config)
+
+        lora_enabled = self.lora_rank > 0 or int(self.lora.get("rank", 0) or 0) > 0
+        if lora_enabled:
+            lora_rank = max(self.lora_rank, int(self.lora.get("rank", 0) or 0))
+            lora_alpha = (
+                int(self.lora.get("alpha", 0) or 0)
+                if int(self.lora.get("rank", 0) or 0) > 0
+                else self.lora_alpha
+            )
+            self.lora_adapter_plan = build_glm5_next_lora_adapter_plan(
+                self.hf_config,
+                self.target_modules,
+                rank=lora_rank,
+                alpha=lora_alpha,
+                exclude_modules=self.exclude_modules,
+            )
+            if self.lora_adapter_plan is not None:
+                self.target_modules = self.lora_adapter_plan["target_modules"]
+                self.exclude_modules = self.lora_adapter_plan["trainer_exclude_modules"]
 
     def get_processor(self):
         return self.processor if self.processor is not None else self.tokenizer

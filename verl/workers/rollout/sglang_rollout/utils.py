@@ -123,8 +123,18 @@ def lora_served_as_adapter(model_config) -> bool:
     return lora_enabled and not model_config.lora.get("merge", False)
 
 
-def sglang_lora_target_modules(target_modules: Any) -> list[str]:
+def sglang_lora_target_modules(
+    target_modules: Any, adapter_plan: Optional[dict[str, Any]] = None
+) -> list[str]:
     """Render verl's ``model.target_modules`` as SGLang's ``lora_target_modules``."""
+    if adapter_plan is not None:
+        expected = list(adapter_plan["target_modules"])
+        if list(target_modules) != expected:
+            raise ValueError(
+                "LoRA trainer targets no longer match the resolved adapter plan "
+                f"{adapter_plan['fingerprint']}"
+            )
+        return list(adapter_plan["rollout_target_modules"])
     if target_modules == "all-linear":
         return ["all"]
     if isinstance(target_modules, str):
