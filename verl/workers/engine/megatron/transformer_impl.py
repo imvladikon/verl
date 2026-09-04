@@ -496,6 +496,13 @@ class MegatronEngine(BaseEngine):
         self.tf_config = updated_tf_config
         print(f"module: {len(module)}")
 
+        if self.peft_cls is not None:
+            from verl.utils.megatron_peft_utils import validate_peft_trainable_parameters
+
+            peft_summary = validate_peft_trainable_parameters(module)
+            if torch.distributed.get_rank() == 0:
+                print(f"Post-wrap PEFT invariant: {peft_summary}")
+
         if self.engine_config.use_dist_checkpointing:
             load_mcore_dist_weights(
                 module, self.engine_config.dist_checkpointing_path, is_value_model=self.is_value_model
