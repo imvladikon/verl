@@ -360,7 +360,8 @@ class ServerAdapter(BaseRollout):
 
         peft_config, base_sync_done = kwargs.get("peft_config", None), kwargs.get("base_sync_done", False)
         if peft_config and base_sync_done:
-            if self.device_mesh["infer_tp"].get_local_rank() == 0:
+            is_tp_leader = self.device_mesh["infer_tp"].get_local_rank() == 0
+            if is_tp_leader:
                 # unload lora
                 models_result = await self._engine.available_models()
                 exists = any(item["id"] == SGLANG_LORA_NAME for item in models_result["data"])
@@ -378,6 +379,14 @@ class ServerAdapter(BaseRollout):
                 )
                 # send http request
                 await self._engine.load_lora_adapter_from_tensor(req)
+            else:
+                # Megatron-Bridge materializes every exported adapter tensor with
+                # TP/PP collectives.  The server leader owns the HTTP request, but
+                # every trainer rank must advance the generator in the same order
+                # or the leader blocks in the first collective forever.  Discard
+                # tensors here instead of building a redundant full adapter dict.
+                adapter_tensor_count = sum(1 for _ in weights)
+                logger.debug("Drained %d LoRA tensors on non-leader TP rank", adapter_tensor_count)
         else:
             update_weights_bucket_bytes = int(self.config.checkpoint_engine.update_weights_bucket_megabytes) << 20
             if getattr(self, "_use_fp8_weight_sync", self.config.get("quantization", None) == "fp8"):
