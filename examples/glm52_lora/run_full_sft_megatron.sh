@@ -142,6 +142,12 @@ case "${qualification_profile}" in
       exit 2
     fi
     ;;
+  clean-v4-format-script-1792)
+    if (( steps != 28 || global_batch_size != 64 || max_length != 768 || required_max_tokens != 706 )); then
+      echo "clean-v4-format-script-1792 requires STEPS=28, GLOBAL_BATCH_SIZE=64, MAX_LENGTH=768, REQUIRED_MAX_TOKENS=706" >&2
+      exit 2
+    fi
+    ;;
   *)
     echo "unknown QUALIFICATION_PROFILE: ${qualification_profile}" >&2
     exit 2

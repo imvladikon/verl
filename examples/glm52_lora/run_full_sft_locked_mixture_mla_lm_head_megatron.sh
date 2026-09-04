@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exact-data counterpart to run_full_sft_locked_mixture_megatron.sh. It changes
-# only the adapter surface and run directory, keeping data, seed, token budget,
-# optimizer updates and topology identical to the MLA-only qualification.
+# HISTORICAL / DO NOT LAUNCH. The delegated v2 data launcher fails closed and
+# this wrapper is retained only to interpret its old configuration evidence.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=${VERL_REPO_ROOT:-$(cd -- "${script_dir}/../.." && pwd)}

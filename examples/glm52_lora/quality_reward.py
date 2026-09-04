@@ -113,11 +113,32 @@ def _mask_urls_links_and_inline_code(text: str) -> str:
     return "".join(output)
 
 
+def _blockquote_line_numbers(text: str) -> set[int]:
+    """Return all source lines covered by CommonMark blockquotes.
+
+    Token maps include lazy paragraph-continuation lines that do not repeat the
+    ``>`` marker. A prefix-only test would therefore leak quoted Han back into
+    the prose metric.
+    """
+    try:
+        tokens = MARKDOWN.parse(text)
+    except Exception:  # pragma: no cover - markdown_defects records this later
+        return set()
+    result: set[int] = set()
+    for token in tokens:
+        if token.type != "blockquote_open" or token.map is None:
+            continue
+        start, end = token.map
+        result.update(range(start, end))
+    return result
+
+
 def visible_prose(text: str, *, exclude_blockquotes: bool = False) -> str:
     """Return prose used for script statistics, excluding code and destinations."""
     output: list[str] = []
     open_fence: tuple[str, int] | None = None
-    for line in text.splitlines(keepends=True):
+    excluded_quote_lines = _blockquote_line_numbers(text) if exclude_blockquotes else set()
+    for line_index, line in enumerate(text.splitlines(keepends=True)):
         stripped = line.rstrip("\r\n")
         match = FENCE_RE.match(stripped)
         if open_fence is None and match:
@@ -132,7 +153,7 @@ def visible_prose(text: str, *, exclude_blockquotes: bool = False) -> str:
                     open_fence = None
             output.append("\n" if line.endswith("\n") else "")
             continue
-        if exclude_blockquotes and line.lstrip().startswith(">"):
+        if line_index in excluded_quote_lines:
             output.append("\n" if line.endswith("\n") else "")
             continue
         output.append(_mask_urls_links_and_inline_code(line))
@@ -238,12 +259,13 @@ def score_constraints(completion: str, contract: QualityContract) -> ConstraintR
     han_count, cyrillic_count, latin_count = _script_counts(prose)
     defects = markdown_defects(completion, contract)
 
-    if contract.allow_han or contract.requested_language in {"zh", "ja"}:
+    language_root = contract.requested_language.split("-", 1)[0].split("_", 1)[0]
+    if contract.allow_han or language_root in {"zh", "ja"}:
         han_score = 1.0
     else:
         han_score = math.exp(-float(han_count))
 
-    if contract.requested_language == "ru":
+    if language_root == "ru":
         denominator = cyrillic_count + latin_count + han_count
         ratio = cyrillic_count / denominator if denominator else 0.0
         russian_script_score = min(1.0, max(0.0, ratio / 0.70))

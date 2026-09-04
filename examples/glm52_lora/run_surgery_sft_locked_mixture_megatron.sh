@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Thirty-three-update stability gate for the exact 2,728-row quality mixture.
-# This is one full-model epoch in update count (2,128 train rows / global batch
-# 64, dropping the final 16 rows). On one surgery GPU each update sees one
-# example, so this qualifies optimizer stability and mixed-length data plumbing,
-# not full-model batch numerics or language quality.
+# HISTORICAL / DO NOT LAUNCH. This stability run used the invalidated v2
+# quality mixture. Its prior output remains systems evidence only; it is not
+# valid training or quality evidence.
+
+echo "HISTORICAL-INVALID-DATA: locked quality mixture v2 must not be launched" >&2
+exit 2
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "${script_dir}/../.." && pwd)

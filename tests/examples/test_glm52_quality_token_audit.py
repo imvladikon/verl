@@ -42,8 +42,10 @@ def test_token_count_handles_flat_batched_and_mapping_outputs() -> None:
 
 
 def test_measure_covers_every_targeted_row_by_split_and_family() -> None:
-    result = measure(validate_rows(generate_rows()), FakeTokenizer())
-    assert result["overall"]["full_chat"]["count"] == 720
-    assert sum(group["full_chat"]["count"] for group in result["by_split"].values()) == 720
-    assert sum(group["full_chat"]["count"] for group in result["by_family"].values()) == 720
+    rows = validate_rows(generate_rows())
+    result = measure(rows, FakeTokenizer())
+    expected = len(rows)
+    assert result["overall"]["full_chat"]["count"] == expected
+    assert sum(group["full_chat"]["count"] for group in result["by_split"].values()) == expected
+    assert sum(group["full_chat"]["count"] for group in result["by_family"].values()) == expected
     assert result["overall"]["full_chat"]["max"] > result["overall"]["prompt_chat"]["min"]

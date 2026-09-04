@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Full GLM-5.2 LoRA SFT profile for the exact 2,728-row quality mixture.
-# The three train buckets form one optimizer stream. Validation uses the three
-# disjoint validation buckets; test buckets are hash-locked but never trained
-# or selected on.
+# HISTORICAL / DO NOT LAUNCH. This 2,728-row v2 mixture predates the exhaustive
+# split-isolation audit and is retained only as systems/configuration evidence.
+# Use run_full_sft_clean_v4_megatron.sh with the checked-in clean-v4 view.
+
+echo "HISTORICAL-INVALID-DATA: locked quality mixture v2 must not be launched" >&2
+exit 2
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "${script_dir}/../.." && pwd)

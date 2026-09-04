@@ -5,6 +5,13 @@ quality, Markdown validity, or accidental Han characters. Smaller checkpoints
 remain useful for systems tests, but their output quality cannot substitute
 for a held-out base-versus-adapter comparison on the full model.
 
+The dataset side is similarly fail-closed. V2 and v3 are historical invalid
+split-leak artifacts; `mixture_targeted_wikipedia_v4_2240` is the only clean
+candidate. A clean split audit does not itself authorize a production claim:
+the overall result remains `PENDING` until the exact trainer and inference
+weight-shard manifests are trusted, local full-read receipts verify those
+shards, and the paired runtime/output artifacts below are preserved.
+
 This audit was performed with Hugging Face Hub metadata and model cards on
 2026-09-02. Revisions are pinned so later repository changes cannot silently
 change the conclusion.
@@ -36,23 +43,30 @@ Those results establish engineering compatibility, not Russian fluency. The
 shortened ten-layer network is deliberately not a chat or benchmark model.
 
 A production quality claim requires all of the following on the same pinned
-full checkpoint and held-out IDs:
+full checkpoint, clean v4 held-out IDs, and shared pair-runtime contract:
 
 1. Generate the base outputs before training.
 2. Train the adapter on train partitions only.
-3. Generate adapter outputs with identical prompts, chat template, decoding
-   parameters, seed, and token limits.
-4. Report Russian semantic scores separately from deterministic structural
+3. Build distinct base and adapter runtime manifests. Their runtime modes and
+   complete hashes differ, but their independently derived
+   `pair_runtime_contract_sha256` values must be identical.
+4. Generate adapter outputs with identical prompts, chat template, decoding
+   parameters, seed, and token limits; preserve both generation-output
+   manifests.
+5. Report Russian semantic scores separately from deterministic structural
    metrics. Never use Cyrillic character ratio as a semantic-quality proxy.
-5. Compare Markdown validity and accidental-Han rates with confidence
+6. Compare Markdown validity and accidental-Han rates with confidence
    intervals and preserve every raw output for audit.
-6. Require paired semantic non-inferiority on every non-Russian retention row,
+7. Require paired semantic non-inferiority on every non-Russian retention row,
    including legitimate Chinese requests.
-7. Reject the adapter if semantic quality regresses even when the two
+8. Reject the adapter if semantic quality regresses even when the two
    formatting constraints improve.
 
 The official base checkpoint is available through several Hub inference
 providers, but the conversational provider route cannot pin or attest a Hub
 commit. Provider output is therefore only a preflight. The final baseline and
-adapter outputs must come from the exact full base revision, preferably from
-the same runtime, with the adapter artifact hash recorded separately.
+adapter outputs must come from the exact full base revision. They use separate
+base/adapter runtime manifests under one matching pair-runtime contract, with
+the adapter artifact, trusted shard manifests, local verification receipts,
+generation-output manifests, prepared-review manifest, and adjudication
+manifest all recorded separately.
