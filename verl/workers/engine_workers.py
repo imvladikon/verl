@@ -58,6 +58,15 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _attach_actor_model_config(actor_config: ActorConfig, model_config: HFModelConfig) -> HFModelConfig:
+    """Attach shared model state and propagate actor-owned model switches."""
+    actor_config.model_config = model_config
+    # Keep the established actor-level VLM switch, but make the model config
+    # the single contract consumed by every training engine.
+    actor_config.model_config.freeze_vision_tower = actor_config.freeze_vision_tower
+    return actor_config.model_config
+
+
 def _with_routing_replay_flag(enabled: bool):
     """Decorator to set 'enable_routing_replay' flag on the data TensorDict."""
 
@@ -590,7 +599,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # 2. build actor model
         if "actor" in self.role:
             actor_config: ActorConfig = omega_conf_to_dataclass(self.config.actor)
-            actor_config.model_config = model_config
+            _attach_actor_model_config(actor_config, model_config)
             distillation_config: Optional[DistillationConfig] = (
                 omega_conf_to_dataclass(self.distillation_config) if self.distillation_enabled else None
             )

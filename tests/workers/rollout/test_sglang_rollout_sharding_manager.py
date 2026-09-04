@@ -16,6 +16,7 @@
 import pytest
 import torch
 
+from verl.workers.rollout.sglang_rollout import sglang_rollout
 from verl.workers.rollout.sglang_rollout.utils import _compact_for_bucket, get_named_tensor_buckets
 
 _TENSOR_1MB = torch.zeros(512, 512)
@@ -86,6 +87,24 @@ def test_compact_for_bucket_clones_non_contiguous_tensor():
     assert torch.equal(out, tensor)
 
 
+def test_sglang_git_fallback_version_uses_capability_check(monkeypatch):
+    monkeypatch.setattr(sglang_rollout.sglang, "__version__", "0.0.0.dev17566+g3ffe6309e")
+
+    # The reported SCM fallback version is intentionally irrelevant when the
+    # installed function exposes the complete API used below.
+    sglang_rollout._assert_sglang_weight_sync_capabilities()
+
+
+def test_sglang_weight_sync_capability_check_reports_missing_api(monkeypatch):
+    async def old_update_weights(engine, params_batch, device_mesh_key, device_mesh):
+        return None
+
+    monkeypatch.setattr(sglang_rollout, "sgl_update_weights", old_update_weights)
+
+    with pytest.raises(RuntimeError, match="flush_cache"):
+        sglang_rollout._assert_sglang_weight_sync_capabilities()
+
+
 @pytest.mark.asyncio
 async def test_get_named_tensor_buckets_preserves_values():
     # The conditional clone must not change the data that ends up in the buckets.
@@ -98,3 +117,69 @@ async def test_get_named_tensor_buckets_preserves_values():
     assert set(flat) == set(expected)
     for name, tensor in expected.items():
         assert torch.equal(flat[name], tensor)
+
+
+@pytest.mark.asyncio
+async def test_server_adapter_finalizes_quantized_reload_after_all_buckets(monkeypatch):
+    """The last RPC is a transaction boundary, not another data bucket."""
+
+    class AttrDict(dict):
+        __getattr__ = dict.__getitem__
+
+    class FakeMesh:
+        def __getitem__(self, key):
+            assert key == "infer_tp"
+            return self
+
+        @staticmethod
+        def get_local_rank():
+            return 0
+
+    class FakeEngine:
+        def __init__(self):
+            self.flush_count = 0
+
+        async def flush_cache(self):
+            self.flush_count += 1
+
+    calls = []
+
+    async def record_update(**kwargs):
+        calls.append(
+            {
+                "names": [name for name, _ in kwargs["params_batch"]],
+                "flush_cache": kwargs["flush_cache"],
+            }
+        )
+
+    async def already_initialized(self):
+        return None
+
+    monkeypatch.setattr(sglang_rollout, "sgl_update_weights", record_update)
+    monkeypatch.setattr(sglang_rollout, "_to_ipc_device", lambda tensor: tensor)
+    monkeypatch.setattr(sglang_rollout.ServerAdapter, "_init_server_adapter", already_initialized)
+
+    adapter = sglang_rollout.ServerAdapter.__new__(sglang_rollout.ServerAdapter)
+    adapter.config = AttrDict(
+        quantization=None,
+        checkpoint_engine=AttrDict(update_weights_bucket_megabytes=1),
+    )
+    adapter.model_config = None
+    adapter.device_mesh = FakeMesh()
+    adapter._engine = FakeEngine()
+    adapter._pd_role = None
+
+    weights = iter(
+        [
+            ("model.layers.0.mlp.gate_proj.weight", torch.zeros(512, 512)),
+            ("model.layers.0.mlp.up_proj.weight", torch.ones(512, 512)),
+        ]
+    )
+    await adapter.update_weights(weights)
+
+    assert calls == [
+        {"names": ["model.layers.0.mlp.gate_proj.weight"], "flush_cache": False},
+        {"names": ["model.layers.0.mlp.up_proj.weight"], "flush_cache": False},
+        {"names": [], "flush_cache": True},
+    ]
+    assert adapter._engine.flush_count == 1

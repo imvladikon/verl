@@ -27,6 +27,7 @@ from .model_forward_fused import fused_forward_model_gen, fused_forward_model_en
 
 
 class SupportedVLM(Enum):
+    GLM53_FLASH = "Glm5NextForConditionalGeneration"
     QWEN2_5_VL = "Qwen2_5_VLForConditionalGeneration"
     QWEN3_MOE_VL = "Qwen3VLMoeForConditionalGeneration"
     QWEN3_VL = "Qwen3VLForConditionalGeneration"

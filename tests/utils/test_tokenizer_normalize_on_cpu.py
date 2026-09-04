@@ -15,7 +15,7 @@
 import numpy as np
 import pytest
 
-from verl.utils.tokenizer import normalize_token_ids
+from verl.utils.tokenizer import hf_processor, normalize_token_ids
 
 
 class DummyBatchEncoding:
@@ -66,3 +66,18 @@ def test_normalize_token_ids_valid_outputs(tokenized_output, expected):
 def test_normalize_token_ids_invalid_outputs(tokenized_output):
     with pytest.raises(TypeError):
         normalize_token_ids(tokenized_output)
+
+
+def test_hf_processor_keeps_glm53_flash_processor(monkeypatch):
+    from transformers import AutoConfig, AutoProcessor
+
+    processor = type("Glm5NextProcessor", (), {})()
+    config = object()
+    monkeypatch.setattr(AutoProcessor, "from_pretrained", lambda *_args, **_kwargs: processor)
+    monkeypatch.setattr(AutoConfig, "from_pretrained", lambda *_args, **_kwargs: config)
+
+    resolved = hf_processor("unused-local-checkpoint")
+
+    assert resolved is processor
+    assert resolved.config is config
+    assert not hasattr(resolved, "get_rope_index")

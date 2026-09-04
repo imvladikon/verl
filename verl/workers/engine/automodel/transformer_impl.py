@@ -41,6 +41,7 @@ from torch.distributed.tensor import DTensor
 import verl.utils.torch_functional as verl_F
 from verl.trainer.config import CheckpointConfig
 from verl.utils import tensordict_utils as tu
+from verl.utils.checkpoint.checkpoint_manager import BaseCheckpointManager
 from verl.utils.dataset.dataset_utils import DatasetPadMode
 from verl.utils.debug import log_gpu_memory_usage
 from verl.utils.device import get_device_id, get_device_name
@@ -52,7 +53,7 @@ from ..base import BaseEngine, BaseEngineCtx, EngineRegistry
 from ..utils import enable_full_determinism, postprocess_batch_func, prepare_micro_batches
 from .utils import (
     build_automodel_model,
-    build_distributed_config_from_engine_config,
+    build_distributed_setup_from_engine_config,
     get_dp_group_size,
     get_dp_rank,
     get_pp_rank,
@@ -88,6 +89,7 @@ class AutomodelEngine(BaseEngine):
 
         self.mode = None
         self.rank = torch.distributed.get_rank()
+        self.world_size = torch.distributed.get_world_size()
 
         # Apply compatibility patches early in the process
         from nemo_automodel._transformers.utils import apply_cache_compatibility_patches
@@ -96,10 +98,11 @@ class AutomodelEngine(BaseEngine):
         apply_cache_compatibility_patches()
         apply_te_patches()
 
-        world_size = torch.distributed.get_world_size()
-        self.distributed_config, self.device_mesh, self.moe_mesh = build_distributed_config_from_engine_config(
-            self.engine_config, world_size
-        )
+        self.distributed_setup = build_distributed_setup_from_engine_config(self.engine_config, self.world_size)
+        self.distributed_config = self.distributed_setup.strategy_config
+        self.device_mesh = self.distributed_setup.mesh_context.device_mesh
+        self.moe_mesh = self.distributed_setup.mesh_context.moe_mesh
+        self._is_glm53_flash = self.model_config.hf_config.model_type == "glm5_next"
 
         if self.engine_config.full_determinism:
             enable_full_determinism(seed=self.engine_config.seed)
@@ -128,9 +131,7 @@ class AutomodelEngine(BaseEngine):
 
     def initialize(self):
         """Build the model, optimizer, LR scheduler, and checkpointer using Automodel infrastructure."""
-        self.module = build_automodel_model(
-            self.model_config, self.engine_config, self.distributed_config, self.device_mesh, self.moe_mesh
-        )
+        self.module = build_automodel_model(self.model_config, self.engine_config, self.distributed_setup)
         log_gpu_memory_usage("After Automodel model build", logger=logger)
 
         if not self.engine_config.forward_only:
@@ -155,13 +156,11 @@ class AutomodelEngine(BaseEngine):
 
     def _build_optimizer(self, module):
         """Build optimizer via Automodel's build_optimizer."""
-        from nemo_automodel.components.config.loader import ConfigNode
-        from nemo_automodel.recipes.llm.train_ft import build_optimizer as automodel_build_optimizer
+        from nemo_automodel.components.optim.optimizer import build_optimizer as automodel_build_optimizer
 
         config = self.optimizer_config
 
         opt_dict = {
-            "_target_": f"{config.optimizer_impl}.{config.optimizer}",
             "lr": config.lr,
             "weight_decay": config.weight_decay,
             "eps": config.eps,
@@ -182,8 +181,11 @@ class AutomodelEngine(BaseEngine):
         if config.override_optimizer_config:
             opt_dict.update(config.override_optimizer_config)
 
-        cfg_opt = ConfigNode(opt_dict)
-        optimizers = automodel_build_optimizer(module, cfg_opt, self.distributed_config, self.device_mesh)
+        optimizers = automodel_build_optimizer(
+            module,
+            (f"{config.optimizer_impl}.{config.optimizer}", opt_dict),
+            device_mesh=self.device_mesh,
+        )
         assert len(optimizers) == 1, f"Expected 1 optimizer, got {len(optimizers)}"
         return optimizers[0]
 
@@ -355,13 +357,17 @@ class AutomodelEngine(BaseEngine):
             raise ValueError(f"Invalid device type: {device}")
 
     def _build_checkpointer(self):
+        save_contents = self._checkpoint_contents("save")
+        save_consolidated = getattr(self.checkpoint_config, "save_consolidated", True)
+        if "hf_model" in save_contents and not save_consolidated:
+            raise ValueError("AutoModel save_contents includes 'hf_model', but save_consolidated is false")
         ckpt_config = CheckpointingConfig(
             enabled=True,
             checkpoint_dir="checkpoints/",
             model_save_format="safetensors",
             model_cache_dir=HF_HUB_CACHE,
             model_repo_id=self.model_config.path,
-            save_consolidated=True,
+            save_consolidated=save_consolidated,
             is_peft=False,
         )
         self.checkpointer = Checkpointer(
@@ -371,6 +377,92 @@ class AutomodelEngine(BaseEngine):
             pp_rank=get_pp_rank(self.device_mesh),
             moe_mesh=self.moe_mesh,
         )
+
+    def _checkpoint_contents(self, phase: str) -> set[str]:
+        contents = set(getattr(self.checkpoint_config, f"{phase}_contents"))
+        allowed = {"model", "hf_model", "optimizer", "extra"}
+        if not contents:
+            raise ValueError(f"AutoModel checkpoint {phase}_contents must not be empty")
+        unknown = contents - allowed
+        if unknown:
+            raise ValueError(
+                f"Unknown AutoModel checkpoint {phase}_contents: {sorted(unknown)}; "
+                f"allowed values are {sorted(allowed)}"
+            )
+        return contents
+
+    @staticmethod
+    def _distributed_flag_device() -> torch.device:
+        if torch.distributed.is_initialized() and torch.distributed.get_backend() == "nccl":
+            return torch.device(get_device_name(), get_device_id())
+        return torch.device("cpu")
+
+    def _any_rank(self, local_value: bool) -> bool:
+        if not torch.distributed.is_initialized() or torch.distributed.get_world_size() == 1:
+            return local_value
+        flag = torch.tensor(
+            int(local_value),
+            dtype=torch.int32,
+            device=self._distributed_flag_device(),
+        )
+        torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
+        return bool(flag.item())
+
+    def _raise_if_any_rank_failed(self, local_error: Exception | None, action: str) -> None:
+        if not self._any_rank(local_error is not None):
+            return
+        detail = f": {local_error}" if local_error is not None else " on another rank"
+        raise RuntimeError(f"AutoModel checkpoint {action} failed{detail}") from local_error
+
+    def _rng_state_path(self, local_path: str) -> str:
+        return os.path.join(
+            local_path,
+            f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt",
+        )
+
+    def _save_rng_state(self, local_path: str) -> None:
+        output_path = self._rng_state_path(local_path)
+        local_error = None
+        try:
+            os.makedirs(local_path, exist_ok=True)
+            temporary_path = output_path + ".tmp"
+            torch.save({"rng": BaseCheckpointManager.get_rng_state()}, temporary_path)
+            os.replace(temporary_path, output_path)
+        except Exception as error:
+            local_error = error
+        self._raise_if_any_rank_failed(local_error, "RNG save")
+
+    def _load_rng_state(self, local_path: str) -> None:
+        input_path = self._rng_state_path(local_path)
+        if self._any_rank(not os.path.isfile(input_path)):
+            message = (
+                "AutoModel checkpoint requested extra state, but per-rank RNG state "
+                f"is incomplete for world size {self.world_size}"
+            )
+            if getattr(self.checkpoint_config, "strict_rng_state", False):
+                raise RuntimeError(message)
+            logger.warning("%s; all ranks continue without RNG restoration", message)
+            return
+
+        state = None
+        local_error = None
+        try:
+            state = torch.load(input_path, map_location="cpu", weights_only=False)
+            if not isinstance(state, dict) or not isinstance(state.get("rng"), dict):
+                raise RuntimeError(f"AutoModel extra state contains no RNG payload: {input_path}")
+            missing_keys = {"cpu", "numpy", "random"} - set(state["rng"])
+            if missing_keys:
+                raise RuntimeError(f"AutoModel RNG payload is missing keys {sorted(missing_keys)}: {input_path}")
+        except Exception as error:
+            local_error = error
+        self._raise_if_any_rank_failed(local_error, "RNG deserialize")
+
+        local_error = None
+        try:
+            BaseCheckpointManager.load_rng_state(state["rng"])
+        except Exception as error:
+            local_error = error
+        self._raise_if_any_rank_failed(local_error, "RNG restore")
 
     def save_checkpoint(
         self,
@@ -385,13 +477,28 @@ class AutomodelEngine(BaseEngine):
         if self._is_offload_param or origin_module_device == "cpu":
             load_automodel_model_to_gpu(self.module)
 
-        # Save model weights
-        self.checkpointer.save_model(self.module, local_path)
+        save_contents = self._checkpoint_contents("save")
+
+        # The AutoModel-specific checkpoint config controls whether this model
+        # save also materializes a consolidated HF copy.
+        if "model" in save_contents or "hf_model" in save_contents:
+            self.checkpointer.save_model(self.module, local_path)
 
         # Save optimizer and LR scheduler state
-        if self.optimizer is not None:
+        if "optimizer" in save_contents and self.optimizer is not None:
+            # PyTorch's flattened optimizer load plan expects Adam state for
+            # every parameter in the param groups.  A parameter that did not
+            # participate in the first step (for example a DSA indexer on a
+            # short-sequence smoke batch) otherwise has no saved ``step`` or
+            # moment tensors and makes a fresh process fail strict DCP load.
+            from nemo_automodel.components.checkpoint.stateful_wrappers import _materialize_missing_adam_state
+
+            _materialize_missing_adam_state(self.optimizer)
             scheduler_list = [self.lr_scheduler] if self.lr_scheduler is not None else None
             self.checkpointer.save_optimizer(self.optimizer, self.module, local_path, scheduler=scheduler_list)
+
+        if "extra" in save_contents:
+            self._save_rng_state(local_path)
 
         torch.distributed.barrier()
         if self._is_offload_param:
@@ -404,14 +511,24 @@ class AutomodelEngine(BaseEngine):
         if self._is_offload_param:
             load_automodel_model_to_gpu(self.module)
 
-        model_path = os.path.join(local_path, "model")
-        if not os.path.isdir(model_path):
-            model_path = local_path
-        self.checkpointer.load_model(self.module, model_path)
+        load_contents = self._checkpoint_contents("load")
+        if "model" in load_contents:
+            model_path = os.path.join(local_path, "model")
+            if not os.path.isdir(model_path):
+                model_path = local_path
+            self.checkpointer.load_model(self.module, model_path)
+        elif "hf_model" in load_contents:
+            model_path = os.path.join(local_path, "model", "consolidated")
+            if not os.path.isdir(model_path):
+                raise FileNotFoundError(f"AutoModel consolidated HF checkpoint does not exist: {model_path}")
+            self.checkpointer.load_model(self.module, model_path)
 
-        if self.optimizer is not None:
+        if "optimizer" in load_contents and self.optimizer is not None:
             scheduler_list = [self.lr_scheduler] if self.lr_scheduler is not None else None
             self.checkpointer.load_optimizer(self.optimizer, self.module, local_path, scheduler=scheduler_list)
+
+        if "extra" in load_contents:
+            self._load_rng_state(local_path)
 
         torch.distributed.barrier()
         if self._is_offload_param:
@@ -421,10 +538,29 @@ class AutomodelEngine(BaseEngine):
             offload_automodel_optimizer(self.optimizer)
 
     def get_per_tensor_param(self, **kwargs):
+        if self._is_glm53_flash and self.engine_config.ep_size > 1:
+            raise NotImplementedError(
+                "GLM-5.3-Flash AutoModel rollout sync with EP>1 is not yet safe: "
+                "the model-specific adapter exports only rank-local experts, while the "
+                "VERL full-seed protocol requires every rank to iterate the same complete "
+                "HF tensor stream. Use the qualified Megatron-Bridge engine for production "
+                "VERL, or AutoModel with EP=1 for tiny-contract tests."
+            )
         load_automodel_model_to_gpu(self.module)
 
         params = self.module.state_dict()
-        params = convert_weight_keys(params, getattr(self.module, "_fsdp_wrapped_module", self.module))
+        unwrapped = getattr(self.module, "_fsdp_wrapped_module", self.module)
+        state_dict_adapter = getattr(unwrapped, "state_dict_adapter", None)
+        if self._is_glm53_flash:
+            if state_dict_adapter is None:
+                raise RuntimeError("GLM-5.3-Flash rollout export requires its HF state-dict adapter")
+            params = state_dict_adapter.to_hf(
+                params,
+                exclude_key_regex=r".*_extra_state.*",
+                quantization=False,
+            )
+        else:
+            params = convert_weight_keys(params, unwrapped)
 
         if self._is_offload_param:
             offload_automodel_model_to_cpu(self.module)
@@ -524,12 +660,13 @@ class AutomodelEngineWithLMHead(AutomodelEngine):
                 "position_ids": position_ids_rmpad,
             }
 
-            # For TE attention backend, pass cu_seqlens
-            if self.engine_config.attn_implementation == "te":
+            # Flash KDA is recurrent: every packed document boundary must be
+            # supplied even when sparse DSA uses SDPA/cuDNN rather than TE.
+            if self._is_glm53_flash or self.engine_config.attn_implementation == "te":
                 cu_seqlens = input_ids.offsets().to(torch.int32)
                 max_seqlen = cu_seqlens.diff().max().item()
                 model_inputs["qkv_format"] = "thd"
-                model_inputs["cu_seqlens"] = cu_seqlens.unsqueeze(0)
+                model_inputs["cu_seqlens"] = cu_seqlens
                 model_inputs["max_seqlen"] = max_seqlen
 
         else:

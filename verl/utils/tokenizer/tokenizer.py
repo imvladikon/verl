@@ -226,6 +226,11 @@ def hf_processor(name_or_path, **kwargs):
                 from transformers.models.glm46v import Glm46VModel
 
                 model_class = Glm46VModel
+            case "Glm5NextProcessor":
+                # GLM-5.3-Flash uses the processor's own multimodal placeholder
+                # expansion and standard one-dimensional positions; unlike the
+                # Qwen VLM families it has no model get_rope_index helper to bind.
+                pass
             case "MllamaProcessor":
                 pass  # MllamaProcessor and MllamaModel doesn't have get_rope_index property
             case "Gemma4Processor":

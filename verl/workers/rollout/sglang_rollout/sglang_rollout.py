@@ -15,6 +15,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import inspect
 import logging
 import multiprocessing as mp
 import os
@@ -42,6 +43,8 @@ from verl.workers.rollout.base import BaseRollout
 from verl.workers.rollout.sglang_rollout.http_server_engine import AsyncHttpServerAdapter
 from verl.workers.rollout.sglang_rollout.utils import (
     DEEPSEEK_V4_FUSION_GROUPS,
+    GLM_MOE_DSA_BF16_FUSION_GROUPS,
+    GLM_MOE_DSA_FP8_FUSION_GROUPS,
     SGLANG_LORA_NAME,
     get_named_tensor_buckets,
     lora_served_as_adapter,
@@ -62,6 +65,25 @@ def _to_ipc_device(tensor: torch.Tensor) -> torch.Tensor:
     """Move a CPU tensor to the device, one at a time: sglang's IPC patch indexes a reducer slot
     that only device tensors have."""
     return tensor.to(get_device_id(), non_blocking=True) if tensor.device.type == "cpu" else tensor
+
+
+def _assert_sglang_weight_sync_capabilities() -> None:
+    """Validate the API we use without trusting setuptools-scm's fallback version.
+
+    PEP 508 builds from ``git+...#subdirectory=python`` may not contain SGLang's
+    tags and are consequently published as ``0.0.0.dev*`` even when the source
+    is newer than the former 0.5.5 minimum.
+    """
+    required = {"engine", "params_batch", "device_mesh_key", "device_mesh", "flush_cache"}
+    available = set(inspect.signature(sgl_update_weights).parameters)
+    missing = sorted(required - available)
+    if missing:
+        import sglang
+
+        raise RuntimeError(
+            "Installed SGLang does not provide the weight-sync API required for FP8 rollout: "
+            f"missing {missing}; reported version={sglang.__version__!r}"
+        )
 
 
 # patch to avoid issue https://github.com/sgl-project/sglang/issues/6723
@@ -130,15 +152,16 @@ class ServerAdapter(BaseRollout):
         replica_rank: int = -1,
     ):
         super().__init__(config, model_config, device_mesh)
-        if self.config.get("quantization", None) == "fp8":
-            import sglang
-            from packaging import version
+        from verl.utils.sglang.sglang_fp8_utils import is_sglang_fp8_quant_config
 
+        checkpoint_quant_config = getattr(self.model_config.hf_config, "quantization_config", None)
+        self._use_fp8_weight_sync = self.config.get("quantization", None) == "fp8" or is_sglang_fp8_quant_config(
+            checkpoint_quant_config
+        )
+        if self._use_fp8_weight_sync:
             from verl.utils.sglang.sglang_fp8_utils import build_sglang_fp8_quant_config
 
-            assert version.parse(sglang.__version__) >= version.parse("0.5.5"), (
-                "sglang>=0.5.5 is required for FP8 quantization"
-            )
+            _assert_sglang_weight_sync_capabilities()
             fp8_block_quant_kwargs = build_sglang_fp8_quant_config(self.model_config.hf_config)
             self.model_config.hf_config.quantization_config = fp8_block_quant_kwargs
         self._engine: AsyncHttpServerAdapter = None
@@ -357,7 +380,7 @@ class ServerAdapter(BaseRollout):
                 await self._engine.load_lora_adapter_from_tensor(req)
         else:
             update_weights_bucket_bytes = int(self.config.checkpoint_engine.update_weights_bucket_megabytes) << 20
-            if self.config.get("quantization", None) == "fp8":
+            if getattr(self, "_use_fp8_weight_sync", self.config.get("quantization", None) == "fp8"):
                 from verl.utils.sglang.sglang_fp8_utils import SGLangFP8QuantizerHelper
 
                 logger.info("Convert bf16 weights to fp8 format before loading")
@@ -369,11 +392,18 @@ class ServerAdapter(BaseRollout):
             else:
                 weights = weights
 
-            fusion_groups = (
-                DEEPSEEK_V4_FUSION_GROUPS
-                if getattr(self.model_config.hf_config, "model_type", None) == "deepseek_v4"
-                else ()
-            )
+            model_type = getattr(self.model_config.hf_config, "model_type", None)
+            if model_type == "deepseek_v4":
+                fusion_groups = DEEPSEEK_V4_FUSION_GROUPS
+            elif model_type == "glm_moe_dsa":
+                use_fp8_weight_sync = getattr(
+                    self,
+                    "_use_fp8_weight_sync",
+                    self.config.get("quantization", None) == "fp8",
+                )
+                fusion_groups = GLM_MOE_DSA_FP8_FUSION_GROUPS if use_fp8_weight_sync else GLM_MOE_DSA_BF16_FUSION_GROUPS
+            else:
+                fusion_groups = ()
             async for params_batch in get_named_tensor_buckets(
                 weights, update_weights_bucket_bytes, fusion_groups=fusion_groups
             ):
@@ -382,7 +412,18 @@ class ServerAdapter(BaseRollout):
                     params_batch=[(_strip_lora_base_layer(name), _to_ipc_device(t)) for name, t in params_batch],
                     device_mesh_key="infer_tp",
                     device_mesh=self.device_mesh,
+                    flush_cache=False,
                 )
+            # Finalize layer-wise kernel repacking only after every bucket has
+            # arrived. An empty request avoids retaining a second full bucket
+            # merely to discover which data bucket is last.
+            await sgl_update_weights(
+                engine=self._engine,
+                params_batch=[],
+                device_mesh_key="infer_tp",
+                device_mesh=self.device_mesh,
+                flush_cache=True,
+            )
 
         if self._engine is not None and self._is_server_tp_leader():
             await self._engine.flush_cache()

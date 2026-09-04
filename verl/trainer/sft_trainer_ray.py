@@ -82,6 +82,7 @@ class SFTTrainer:
             resume_mode=resume_mode,
             resume_from_path=resume_from_path,
             mode=OrchestrationMode.RAY,
+            checkpoint_config=self.checkpoint_config,
         )
 
     def _build_config(self):
@@ -194,7 +195,7 @@ class SFTTrainer:
             batch_size=self.train_batch_size_per_dp,
             sampler=self.train_sampler,
             collate_fn=self.collate_fn,
-            num_workers=8,
+            num_workers=config.data.num_workers,
             pin_memory=False,
             drop_last=True,
             pin_memory_device=device_name,
@@ -209,7 +210,7 @@ class SFTTrainer:
                 batch_size=self.train_batch_size_per_dp,
                 sampler=self.val_sampler,
                 collate_fn=self.collate_fn,
-                num_workers=8,
+                num_workers=config.data.num_workers,
                 pin_memory=False,
                 drop_last=True,
                 pin_memory_device=device_name,

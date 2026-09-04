@@ -14,10 +14,30 @@
 
 """Utility functions for the Automodel engine integration."""
 
+import logging
+
 import torch
 import torch.distributed
 
 from verl.utils.device import get_device_id, get_torch_device
+
+logger = logging.getLogger(__name__)
+
+GLM53_FLASH_MODEL_TYPE = "glm5_next"
+GLM53_FLASH_ARCHITECTURE = "Glm5NextForConditionalGeneration"
+
+
+def is_glm53_flash_config(hf_config) -> bool:
+    """Match only the released GLM-5.3-Flash config contract."""
+    model_type = getattr(hf_config, "model_type", None)
+    architectures = getattr(hf_config, "architectures", None) or []
+    has_flash_marker = model_type == GLM53_FLASH_MODEL_TYPE or GLM53_FLASH_ARCHITECTURE in architectures
+    if has_flash_marker and not (model_type == GLM53_FLASH_MODEL_TYPE and architectures == [GLM53_FLASH_ARCHITECTURE]):
+        raise ValueError(
+            "Inconsistent GLM-5.3-Flash config: expected model_type='glm5_next' and exactly "
+            f"architectures=['{GLM53_FLASH_ARCHITECTURE}'], got {model_type=!r}, {architectures=!r}"
+        )
+    return has_flash_marker
 
 
 def get_dp_rank(device_mesh, include_cp=False):
@@ -64,18 +84,24 @@ def maybe_fully_shard_optimizer(model, optimizer, distributed_config):
         fully_shard_optimizer(model, optimizer)
 
 
-def build_distributed_config_from_engine_config(engine_config, world_size):
-    """Build v5 distributed config, device_mesh, and moe_mesh from engine config.
+def build_distributed_setup_from_engine_config(engine_config, world_size):
+    """Build AutoModel's current single-object distributed contract.
 
     Args:
         engine_config: AutomodelEngineConfig instance.
         world_size: Total number of processes in the job.
 
     Returns:
-        Tuple of (distributed_config, device_mesh, moe_mesh).
+        A resolved ``DistributedSetup`` containing policy and meshes.
     """
-    from nemo_automodel.components.distributed.config import DDPConfig, FSDP2Config, MegatronFSDPConfig
-    from nemo_automodel.components.distributed.mesh_utils import create_device_mesh
+    from nemo_automodel.components.distributed.config import (
+        DDPConfig,
+        DistributedSetup,
+        FSDP2Config,
+        MegatronFSDPConfig,
+        MoEParallelizerConfig,
+    )
+    from nemo_automodel.components.distributed.mesh import ParallelismSizes
 
     strategy = engine_config.distributed_strategy
 
@@ -96,6 +122,8 @@ def build_distributed_config_from_engine_config(engine_config, world_size):
             mp_policy=mp_policy,
             activation_checkpointing=engine_config.activation_checkpointing,
             defer_fsdp_grad_sync=engine_config.defer_fsdp_grad_sync,
+            patch_is_packed_sequence=False,
+            enable_compile=engine_config.enable_compile,
         )
 
     elif strategy == "megatron_fsdp":
@@ -111,35 +139,52 @@ def build_distributed_config_from_engine_config(engine_config, world_size):
     else:
         raise ValueError(f"Unsupported distributed_strategy: {strategy}")
 
-    device_mesh, moe_mesh = create_device_mesh(
-        distributed_config,
-        tp_size=engine_config.tp_size,
-        pp_size=engine_config.pp_size,
-        cp_size=engine_config.cp_size,
-        ep_size=engine_config.ep_size,
-        dp_replicate_size=engine_config.dp_replicate_size,
+    moe_parallel_config = None
+    if engine_config.ep_size > 1:
+        moe_kwargs = dict(engine_config.moe_config or {})
+        if isinstance(distributed_config, FSDP2Config):
+            moe_kwargs.setdefault("mp_policy", distributed_config.mp_policy)
+        moe_parallel_config = MoEParallelizerConfig(**moe_kwargs)
+
+    return DistributedSetup.build(
+        strategy=distributed_config,
+        parallelism_sizes=ParallelismSizes(
+            tp_size=engine_config.tp_size,
+            pp_size=engine_config.pp_size,
+            cp_size=engine_config.cp_size,
+            ep_size=engine_config.ep_size,
+            dp_replicate_size=engine_config.dp_replicate_size,
+        ),
+        moe_parallel_config=moe_parallel_config,
+        activation_checkpointing=engine_config.activation_checkpointing,
         world_size=world_size,
     )
 
-    return distributed_config, device_mesh, moe_mesh
+
+def _validate_glm53_flash_engine(engine_config, backend_kwargs: dict) -> None:
+    """Reject unqualified parallelism and state-dict settings for Flash."""
+    if engine_config.tp_size != 1 or engine_config.pp_size != 1:
+        raise ValueError("GLM-5.3-Flash AutoModel supports TP=1 and PP=1; use CP/EP for scale-out")
+    if not backend_kwargs.get("enable_hf_state_dict_adapter", False):
+        raise ValueError("GLM-5.3-Flash requires backend_config.enable_hf_state_dict_adapter=true")
 
 
-def build_automodel_model(model_config, engine_config, distributed_config, device_mesh, moe_mesh):
-    """Build a model using NeMoAutoModelForCausalLM.from_pretrained().
+def build_automodel_model(model_config, engine_config, distributed_setup):
+    """Build a model through AutoModel's current ``DistributedSetup`` API."""
+    from nemo_automodel._transformers import NeMoAutoModelForCausalLM, NeMoAutoModelForImageTextToText
 
-    Args:
-        model_config: HFModelConfig with model path and settings.
-        engine_config: AutomodelEngineConfig with distributed settings.
-        distributed_config: FSDP2Config, MegatronFSDPConfig, or DDPConfig instance.
-        device_mesh: Pre-created device mesh (or None for DDP).
-        moe_mesh: Pre-created MoE mesh (or None).
+    hf_config = model_config.hf_config
+    is_glm53_flash = is_glm53_flash_config(hf_config)
+    backend_kwargs = dict(engine_config.backend_config or {})
+    if is_glm53_flash:
+        _validate_glm53_flash_engine(engine_config, backend_kwargs)
 
-    Returns:
-        A HuggingFace model with Automodel's distributed infrastructure applied.
-    """
-    from nemo_automodel._transformers.auto_model import NeMoAutoModelForCausalLM
-
-    kwargs = {}
+    kwargs = {
+        "attn_implementation": engine_config.attn_implementation,
+        "distributed_setup": distributed_setup,
+        "has_packed_sequence": bool(model_config.use_remove_padding),
+        "trust_remote_code": model_config.trust_remote_code,
+    }
 
     if engine_config.enable_fp8:
         from nemo_automodel.components.quantization.fp8 import FP8Config
@@ -151,47 +196,54 @@ def build_automodel_model(model_config, engine_config, distributed_config, devic
 
         kwargs["compile_config"] = CompileConfig()
 
+    model_path = model_config.local_path or model_config.path
+
     # Qwen/Llama with ep_size<=1: use HF implementation.
     from transformers import AutoConfig
 
-    _cfg = AutoConfig.from_pretrained(model_config.path, trust_remote_code=model_config.trust_remote_code)
+    _cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=model_config.trust_remote_code)
     _arch = (getattr(_cfg, "architectures", None) or [""])[0].lower()
-    if engine_config.ep_size <= 1 and ("qwen" in _arch or "llama" in _arch):
+    if not is_glm53_flash and engine_config.ep_size <= 1 and ("qwen" in _arch or "llama" in _arch):
         kwargs["force_hf"] = True
 
-    if engine_config.backend_config and not kwargs.get("force_hf", False):
-        from nemo_automodel.components.models.common.utils import BackendConfig
+    if backend_kwargs and not kwargs.get("force_hf", False):
+        from nemo_automodel.components.models.common import BackendConfig
 
-        backend_kwargs = dict(engine_config.backend_config)
         kwargs["backend"] = BackendConfig(**backend_kwargs)
-
-    # MoE config for MoEParallelizerConfig
-    if engine_config.ep_size > 1:
-        from nemo_automodel.components.moe.config import MoEParallelizerConfig
-
-        moe_kwargs = dict(engine_config.moe_config) if engine_config.moe_config else {}
-        if hasattr(distributed_config, "mp_policy"):
-            moe_kwargs.setdefault("mp_policy", distributed_config.mp_policy)
-
-        kwargs["moe_config"] = MoEParallelizerConfig(**moe_kwargs)
-
-    kwargs["attn_implementation"] = engine_config.attn_implementation
 
     from verl.utils.torch_dtypes import PrecisionType
 
     kwargs["torch_dtype"] = PrecisionType.to_dtype(engine_config.model_dtype)
 
-    model = NeMoAutoModelForCausalLM.from_pretrained(
-        pretrained_model_name_or_path=model_config.path,
-        device_mesh=device_mesh,
-        moe_mesh=moe_mesh,
-        distributed_config=distributed_config,
-        activation_checkpointing=engine_config.activation_checkpointing,
-        trust_remote_code=model_config.trust_remote_code,
-        **kwargs,
-    )
+    auto_model_cls = NeMoAutoModelForCausalLM
+    if is_glm53_flash:
+        auto_model_cls = NeMoAutoModelForImageTextToText
+        kwargs.update(
+            {
+                # AutoModel's custom-model loader resolves its native config
+                # from the checkpoint and deep-merges this nested override.
+                # Passing a finished ``config=`` object currently duplicates
+                # the constructor's positional config argument.
+                "text_config": {
+                    "num_nextn_predict_layers": 0,
+                    "output_hidden_states": True,
+                },
+                "freeze_config": {
+                    "freeze_vision_tower": bool(getattr(model_config, "freeze_vision_tower", False)),
+                    "freeze_audio_tower": True,
+                    "freeze_language_model": False,
+                },
+                "use_liger_kernel": False,
+                "use_sdpa_patching": False,
+            }
+        )
+        if kwargs["torch_dtype"] is not torch.bfloat16:
+            logger.warning(
+                "GLM-5.3-Flash production training was qualified with BF16 checkpoint dequantization; got %s",
+                kwargs["torch_dtype"],
+            )
 
-    return model
+    return auto_model_cls.from_pretrained(pretrained_model_name_or_path=model_path, **kwargs)
 
 
 @torch.no_grad()
