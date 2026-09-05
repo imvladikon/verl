@@ -11,7 +11,7 @@ contract. The 9B surgery results prove the training path, not language quality.
 | gate | status | evidence or missing artifact |
 |---|---|---|
 | Immutable BF16 base | PASS | `zai-org/GLM-5.2@cf457fa734ab149ffef225f80893eb38c6ff5cdc` and locked `config.json` hash |
-| Teacher-free quality mixture | SPLIT-ISOLATION PASS, content review pending | `mixture_targeted_wikipedia_v4_2240`: `targeted-template-v4` + `wikipedia-corruption-v3`, 2,240 rows (1,812 train / 244 validation / 184 test), mixture SHA-256 `34f0d92ad9b46f0289f26c7aec8cee1b4bdae76310bceda3a8bb36a71d211442` |
+| Teacher-free quality mixture | TRAIN-CENSUS PASS; full runtime and held-out evaluation pending | `mixture_targeted_wikipedia_v11_1232`: 1,232 rows (948 train / 160 validation / 124 test); independently reviewed execution view is 9×64 |
 | Full-width surgery LoRA | PASS | finite backward, adapter export/reload, and MLA+`lm_head` ablation on the 9B fixture |
 | Tensor/expert sharding gates | PASS | TP2 `80ce91da…958`; EP2 `a6a739c9…e13`; combined TP2xEP2 `dbf6d87a…711` |
 | Full topology configs | PASS, runtime pending | W8/EP8, W16/EP16, and W32/EP32 Hydra resolution at TP8; capacity dispositions are analytic, not training passes |
@@ -22,19 +22,20 @@ contract. The 9B surgery results prove the training path, not language quality.
 | Full MLA+`lm_head` adapter | PENDING | run only if the MLA-only result does not close the quality gate |
 | Paired held-out comparison | PENDING | `compare_quality_outputs.py` must report PASS for all three targets |
 
-The v2 and v3 mixtures are historical invalid split-leak artifacts. Their
-training, memory, export, and reload evidence remains systems evidence only;
-neither artifact may be used for model selection or held-out evaluation. V4 is
-the only clean candidate, but its data audit does not make the production gate
-pass without the shard and runtime proof above.
+The v2 and v3 mixtures are historical invalid split-leak artifacts. V4 passed
+split isolation but later content review rejected part of its Wikipedia
+source. Later sampling rounds were replaced by a complete train-only census:
+all 204 corrected targeted rows were accepted, while 95 of 186 Wikipedia
+source groups were accepted. The exact execution view retains 93 groups to
+close the batch budget. This does not replace the shard, runtime, or held-out
+proof above.
 
 ## Sequential experiment order
 
 1. Supply and review the exact trainer and inference shard manifests, then
    complete the local full-read verification for both snapshots.
 2. Build and preserve the full-model base runtime manifest and outputs once.
-3. Train only the MLA-only adapter on the locked 2,240-row v4 mixture with seed
-   52.
+3. Train only the MLA-only adapter on the locked 576-row v11 view with seed 52.
 4. Build a separate adapter runtime manifest, generate paired outputs, and run
    the blinded review and comparator.
 5. Train MLA+`lm_head` only if MLA-only is insufficient. Use the identical
@@ -117,17 +118,17 @@ dynamic billing acknowledgement:
 ```bash
 GLM52_QUALITY_ROOT=/path/to/staged/glm52/lora/quality
 python examples/glm52_lora/generate_full_quality_baseline_hf.py \
-  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v4_2240/seq256/eval_contracts.jsonl" \
-  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v4_2240/seq384/eval_contracts.jsonl" \
-  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v4_2240/seq768/eval_contracts.jsonl" \
-  --ids-file /secure/path/reviewed-v4-quality-preflight-ids.txt \
+  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v11_1232/seq256/eval_contracts.jsonl" \
+  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v11_1232/seq384/eval_contracts.jsonl" \
+  "${GLM52_QUALITY_ROOT}/mixture_targeted_wikipedia_v11_1232/seq768/eval_contracts.jsonl" \
+  --ids-file /secure/path/reviewed-v11-quality-preflight-ids.txt \
   --output base-preflight.jsonl --max-examples 12 --max-tokens 256 \
   --billing-ack 'max_examples=12,max_tokens=256' \
   --unverified-revision-ack hosted-provider-revision-is-not-hf-pinned
 ```
 
 The checked-in `quality_preflight_ids.txt` belongs to the retired pre-v4
-contracts and must not be reused; create and review a new v4 ID list before
+contracts and must not be reused; create and review a new v11 ID list before
 running this diagnostic preflight.
 
 This is only `HOSTED-PREFLIGHT/PROVIDER-REVISION-UNVERIFIED`. The HF
@@ -153,20 +154,18 @@ and the v3 failure is recorded in
 
 ## Config-only status
 
-The historical `run_full_sft_locked_mixture*.sh` launchers fail immediately and
-must not be pointed at v4. The current
-`run_full_sft_clean_v4_megatron.sh` launcher verifies every staged source/view
-artifact, checks the exact 28×64 budget, and delegates to
-`run_full_sft_megatron.sh`. A config-only resolution still requires a staged
-clean-v4 tree and immutable model config because those identities are part of
-the gate:
+The historical `run_full_sft_locked_mixture*.sh` launchers fail immediately.
+The current `run_full_sft_census_v11_megatron.sh` launcher verifies every
+staged view artifact, checks the exact 9×64 budget, and delegates to
+`run_full_sft_megatron.sh`. A config-only resolution requires the staged v11
+view and immutable model config because those identities are part of the gate:
 
 ```bash
 CONFIG_ONLY=1 \
 GLM52_QUALITY_ROOT=/path/to/staged/glm52/lora/quality \
 MODEL_PATH=/path/to/immutable/GLM-5.2 \
-examples/glm52_lora/run_full_sft_clean_v4_megatron.sh \
-  > resolved-clean-v4-mla-only.yaml
+examples/glm52_lora/run_full_sft_census_v11_megatron.sh \
+  > resolved-census-v11-mla-only.yaml
 ```
 
 The Yandex profile still names historical v3 YT tables. Do not launch that path
@@ -176,15 +175,15 @@ are updated in a separately reviewed code change.
 The topology and trainable-count results remain systems evidence: expected
 global trainable counts are 106,149,888 for MLA-only and 108,726,272 for
 MLA+`lm_head`; at TP8 their local counts are 29,552,640 and 29,874,688. A new
-v4 config-only resolution must use the exact clean-v4 training view, explicitly
-lock its batch/update budget, and then pass
+A v11 config-only resolution must use the exact census training view, lock its
+batch/update budget, and then pass
 `examples/glm52_lora/verify_full_sft_config.py` with the matching topology and
 file-count expectations before allocation.
 
 ## Quality decision
 
 Run `build_blind_quality_review.py` first on paired rows from the exact full
-checkpoint. Pass all three v4 `eval_contracts.jsonl` files, both generation
+checkpoint. Pass all three v11 `eval_contracts.jsonl` files, both generation
 output manifests, and the separate base and adapter runtime manifests. The
 runtime manifests must have different modes but the same derived pair-runtime
 contract. The tool deterministically hides base/adapter identity with an HMAC key,

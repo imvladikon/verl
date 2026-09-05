@@ -31,6 +31,11 @@ EXPECTED_TP_EP_GATE_SHA256 = "dbf6d87a6ffdb2065a5a6bb066558d92a07aff8f63e7a0192f
 CLEAN_V4_VIEW_REVISION = "mixture_targeted_wikipedia_v4_train_1792"
 CLEAN_V4_VIEW_MANIFEST_SHA256 = "389e9574d42b234419f1fb9f4b9ed8c2771aaba40800d84e12e22ae019bca69c"
 CLEAN_V4_SOURCE_MIXTURE_SHA256 = "34f0d92ad9b46f0289f26c7aec8cee1b4bdae76310bceda3a8bb36a71d211442"
+CENSUS_V11_VIEW_REVISION = "mixture_targeted_wikipedia_v11_train_576"
+CENSUS_V11_VIEW_MANIFEST_SHA256 = "1662481ddf1175fca7344fd6fea39e881ab3bc700642375316e681e26980c3eb"
+CENSUS_V11_SOURCE_MIXTURE_SHA256 = "1d84aca3e5e06b4d4a96516bdea9cd32f4957f63fdac4bb20a4b528c841e9e34"
+CENSUS_V11_SPLIT_AUDIT_SHA256 = "52971c69f986f696cb984b5e7ff91f8fe109d6386570b1653b20d71c70195d02"
+CENSUS_V11_SELECTION_SHA256 = "f940e845d962de53017f51f3fb8b874acd3bd7fcb4f9bb803c5a3754b55881ad"
 
 
 def require(condition: bool, message: str) -> None:
@@ -177,6 +182,92 @@ def validate_clean_v4_view_binding(config: dict, manifest_path: Path) -> dict:
     }
 
 
+def validate_census_v11_view_binding(config: dict, manifest_path: Path) -> dict:
+    """Bind a resolved config to the independently censused 9x64 view."""
+    require(manifest_path.is_file(), f"training-view manifest is missing: {manifest_path}")
+    require(
+        sha256(manifest_path) == CENSUS_V11_VIEW_MANIFEST_SHA256,
+        "census-v11 training-view manifest SHA-256 drift",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    require(manifest["dataset_revision"] == CENSUS_V11_VIEW_REVISION, "census-v11 training-view revision drift")
+    require(
+        manifest["scope"] == "independently-reviewed-train-only-formatting-and-script-repair",
+        "census-v11 training-view scope drift",
+    )
+    require(manifest["broad_russian_quality_proof"] is False, "census-v11 view must not claim broad Russian quality")
+    require(
+        manifest["source"]["mixture_rows_sha256"] == CENSUS_V11_SOURCE_MIXTURE_SHA256,
+        "census-v11 source mixture drift",
+    )
+    require(
+        manifest["source"]["split_isolation_audit_sha256"] == CENSUS_V11_SPLIT_AUDIT_SHA256,
+        "census-v11 split audit drift",
+    )
+    require(manifest["selection_sha256"] == CENSUS_V11_SELECTION_SHA256, "census-v11 selection hash drift")
+    for review_name, reviewer in (("wikipedia", "Sagan"), ("targeted", "Aristotle")):
+        review = manifest["reviews"][review_name]
+        require(review["reviewer"] == reviewer, f"census-v11 {review_name} reviewer drift")
+        require(review["heldout_rows_read"] == 0, f"census-v11 {review_name} review read heldout rows")
+
+    selection = manifest["selection"]
+    require(selection["source_train_rows"] == 948, "census-v11 source count drift")
+    require(selection["selected_train_rows"] == 576, "census-v11 selected count drift")
+    require(selection["global_batch_size"] == 64, "census-v11 batch size drift")
+    require(selection["optimizer_steps"] == 9, "census-v11 step count drift")
+    require(selection["consumed_train_rows"] == 576, "census-v11 consumption drift")
+    require(selection["targeted_train_rows"] == 204, "census-v11 target drift")
+    require(selection["wikipedia_selected_groups"] == 93, "census-v11 Wikipedia selection drift")
+    require(selection["algorithm"]["replacement"] is False, "census-v11 replacement enabled")
+    require(
+        selection["selected_rows_by_bucket"] == {"seq256": 481, "seq384": 54, "seq768": 41},
+        "census-v11 bucket counts drift",
+    )
+
+    view_root = manifest_path.parent.resolve()
+    data = config["data"]
+    train_files = file_list(data["train_files"], label="train")
+    val_files = file_list(data["val_files"], label="validation")
+    require(len(train_files) == len(val_files) == 1, "census-v11 requires single tables")
+    train_artifact = manifest["artifacts"]["train"]
+    validation_artifact = manifest["artifacts"]["validation"]
+    test_artifact = manifest["artifacts"]["test"]
+    expected_train = (view_root / train_artifact["sft_parquet"]).resolve()
+    expected_validation = (view_root / validation_artifact["sft_parquet"]).resolve()
+    expected_test = (view_root / test_artifact["sft_parquet"]).resolve()
+    require(Path(train_files[0]).resolve() == expected_train, "census-v11 train path drift")
+    require(Path(val_files[0]).resolve() == expected_validation, "census-v11 validation path drift")
+    configured_files = {Path(path).resolve() for path in train_files + val_files}
+    require(expected_test not in configured_files, "test split entered training config")
+    for split, expected_path, artifact in (
+        ("train", expected_train, train_artifact),
+        ("validation", expected_validation, validation_artifact),
+        ("test", expected_test, test_artifact),
+    ):
+        require(sha256(expected_path) == artifact["sft_parquet_sha256"], f"census-v11 {split} SHA-256 drift")
+
+    require(data["train_max_samples"] == 576, "census-v11 train_max_samples drift")
+    require(data["val_max_samples"] == 160, "census-v11 val_max_samples drift")
+    trainer = config["trainer"]
+    require(trainer["total_training_steps"] == 9, "census-v11 step count drift")
+    require(data["train_batch_size"] == 64, "census-v11 global batch drift")
+    require(trainer["total_epochs"] == 1, "census-v11 must remain one epoch")
+    require(
+        trainer["total_training_steps"] * data["train_batch_size"] == 576,
+        "census-v11 optimizer budget does not consume the view exactly once",
+    )
+    return {
+        "dataset_revision": manifest["dataset_revision"],
+        "scope": manifest["scope"],
+        "train_rows": 576,
+        "validation_rows": 160,
+        "untouched_test_rows": 124,
+        "full_chat_max_tokens": 548,
+        "sampling": "none",
+        "replacement": False,
+    }
+
+
 def compute_parallel_topology(config: dict) -> dict[str, int]:
     """Mirror MCore's independent dense and expert process-grid arithmetic."""
     engine = config["engine"]
@@ -251,6 +342,7 @@ def main() -> None:
     parser.add_argument("--expected-cp", type=int, default=1)
     parser.add_argument("--expected-global-batch-size", type=int, default=64)
     parser.add_argument("--clean-v4-training-view-manifest", type=Path)
+    parser.add_argument("--census-v11-training-view-manifest", type=Path)
     parser.add_argument(
         "--expected-lora-profile",
         choices=sorted(LORA_PROFILES),
@@ -345,10 +437,18 @@ def main() -> None:
         config["checkpoint"]["save_lora_only"] is True,
         "full-model checkpoint export enabled",
     )
+    require(
+        not (args.clean_v4_training_view_manifest is not None and args.census_v11_training_view_manifest is not None),
+        "select only one exact training-view manifest",
+    )
     training_view = None
     if args.clean_v4_training_view_manifest is not None:
         padding_contract = validate_clean_v4_padding_contract(config)
         training_view = validate_clean_v4_view_binding(config, args.clean_v4_training_view_manifest)
+        training_view["padding_contract"] = padding_contract
+    elif args.census_v11_training_view_manifest is not None:
+        padding_contract = validate_clean_v4_padding_contract(config)
+        training_view = validate_census_v11_view_binding(config, args.census_v11_training_view_manifest)
         training_view["padding_contract"] = padding_contract
 
     model_config_path = Path(config["model"]["path"]) / "config.json"

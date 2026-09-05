@@ -57,3 +57,38 @@ def test_valid_requested_structure_has_no_markdown_defects() -> None:
         required_blocks=("heading", "list"),
     )
     assert markdown_defects("## Заголовок\n\n- **Корректный** пункт", contract) == ()
+
+
+def test_required_inline_markdown_is_checked_inside_inline_tokens() -> None:
+    contract = QualityContract(
+        requested_language="ru",
+        require_markdown=True,
+        required_blocks=("link", "strong"),
+    )
+    assert markdown_defects("**Результат:** [документация](https://example.test/docs)", contract) == ()
+    defects = markdown_defects("Результат: документация", contract)
+    assert "missing_required_link" in defects
+    assert "missing_required_strong" in defects
+
+
+def test_required_inline_content_is_bound_to_the_requested_span_and_destination() -> None:
+    contract = QualityContract(
+        requested_language="ru",
+        require_markdown=True,
+        required_blocks=("link", "strong"),
+        required_strong_texts=("Важен проверяемый результат",),
+        required_link_destinations=("https://example.test/right",),
+    )
+    wrong = markdown_defects(
+        "**Ключевой вывод:** Важен проверяемый результат. [Документация](https://example.test/wrong)",
+        contract,
+    )
+    assert "missing_required_strong_text:1" in wrong
+    assert "missing_required_link_destination:1" in wrong
+    assert (
+        markdown_defects(
+            "**Важен проверяемый результат**. [Документация](https://example.test/right)",
+            contract,
+        )
+        == ()
+    )

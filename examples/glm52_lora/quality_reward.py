@@ -23,7 +23,7 @@ LINK_DEST_RE = re.compile(r"(?<=\]\()[^)\n]+(?=\))")
 FENCE_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})([^\n]*)$")
 BROKEN_LINK_RE = re.compile(r"!?\[[^\]\n]+\]\([^\)\n]*$")
 HEADING_WITHOUT_SPACE_RE = re.compile(r"^#{1,6}[^#\s]")
-SUPPORTED_BLOCKS = frozenset({"code", "heading", "list", "table"})
+SUPPORTED_BLOCKS = frozenset({"code", "heading", "link", "list", "strong", "table"})
 MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 
 
@@ -34,6 +34,8 @@ class QualityContract:
     allow_han_in_blockquotes: bool = False
     require_markdown: bool = False
     required_blocks: tuple[str, ...] = ()
+    required_strong_texts: tuple[str, ...] = ()
+    required_link_destinations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -216,6 +218,51 @@ def _strong_emphasis_defects(text: str) -> list[str]:
     return defects
 
 
+def _normalize_required_inline_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+
+
+def markdown_inventory(text: str) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
+    """Return token types, normalized strong spans, and exact link destinations."""
+    token_types: set[str] = set()
+    strong_texts: list[str] = []
+    link_destinations: list[str] = []
+
+    def visit(tokens: list[Any]) -> None:
+        strong_stack: list[list[str]] = []
+        for token in tokens:
+            token_types.add(token.type)
+            if token.type == "strong_open":
+                strong_stack.append([])
+            elif token.type == "strong_close" and strong_stack:
+                rendered = "".join(strong_stack.pop())
+                normalized = _normalize_required_inline_text(rendered)
+                if normalized:
+                    strong_texts.append(normalized)
+                if strong_stack:
+                    strong_stack[-1].append(rendered)
+            elif token.type in {"text", "code_inline"}:
+                for capture in strong_stack:
+                    capture.append(token.content)
+            elif token.type in {"softbreak", "hardbreak"}:
+                for capture in strong_stack:
+                    capture.append(" ")
+            if token.type == "link_open":
+                destination = token.attrGet("href")
+                if destination:
+                    link_destinations.append(destination)
+            if token.children:
+                visit(token.children)
+
+    visit(list(MARKDOWN.parse(text)))
+    return token_types, tuple(strong_texts), tuple(link_destinations)
+
+
+def markdown_token_types(text: str) -> set[str]:
+    """Return both block-level and nested inline Markdown token types."""
+    return markdown_inventory(text)[0]
+
+
 def markdown_defects(text: str, contract: QualityContract) -> tuple[str, ...]:
     unknown_blocks = set(contract.required_blocks) - SUPPORTED_BLOCKS
     if unknown_blocks:
@@ -231,20 +278,31 @@ def markdown_defects(text: str, contract: QualityContract) -> tuple[str, ...]:
             defects.append(f"heading_without_space:line={line_number}")
 
     try:
-        tokens = MARKDOWN.parse(text)
+        token_types, strong_texts, link_destinations = markdown_inventory(text)
     except Exception as error:  # pragma: no cover - parser failures are rare
         defects.append(f"parser_error:{type(error).__name__}")
-        tokens = []
-    token_types = {token.type for token in tokens}
+        token_types = set()
+        strong_texts = ()
+        link_destinations = ()
     required_token_types = {
         "code": {"fence"},
         "heading": {"heading_open"},
+        "link": {"link_open"},
         "list": {"bullet_list_open", "ordered_list_open"},
+        "strong": {"strong_open"},
         "table": {"table_open"},
     }
     for required in contract.required_blocks:
         if not required_token_types[required].intersection(token_types):
             defects.append(f"missing_required_{required}")
+    for index, required in enumerate(contract.required_strong_texts, 1):
+        normalized = _normalize_required_inline_text(required)
+        if not any(normalized in span for span in strong_texts):
+            defects.append(f"missing_required_strong_text:{index}")
+    for index, required in enumerate(contract.required_link_destinations, 1):
+        normalized_destination = MARKDOWN.normalizeLink(required)
+        if normalized_destination not in link_destinations:
+            defects.append(f"missing_required_link_destination:{index}")
     structural_types = set().union(*required_token_types.values()) | {"blockquote_open"}
     if contract.require_markdown and not structural_types.intersection(token_types):
         defects.append("missing_required_markdown_structure")
@@ -300,12 +358,28 @@ def contract_from_mapping(info: dict[str, Any] | None) -> QualityContract:
     required_blocks = info.get("required_markdown_blocks", ())
     if not isinstance(required_blocks, (list, tuple)) or any(not isinstance(block, str) for block in required_blocks):
         raise TypeError("required_markdown_blocks must be a list of strings")
+    required_strong_texts = info.get("required_strong_texts", ())
+    if not isinstance(required_strong_texts, (list, tuple)) or any(
+        not isinstance(value, str) or not value.strip() for value in required_strong_texts
+    ):
+        raise TypeError("required_strong_texts must be a list of nonempty strings")
+    required_link_destinations = info.get("required_link_destinations", ())
+    if not isinstance(required_link_destinations, (list, tuple)) or any(
+        not isinstance(value, str) or not value.strip() for value in required_link_destinations
+    ):
+        raise TypeError("required_link_destinations must be a list of nonempty strings")
+    if required_strong_texts and "strong" not in required_blocks:
+        raise ValueError("required_strong_texts requires the strong Markdown block")
+    if required_link_destinations and "link" not in required_blocks:
+        raise ValueError("required_link_destinations requires the link Markdown block")
     return QualityContract(
         requested_language=requested_language.strip().casefold(),
         allow_han=info.get("allow_han", False),
         allow_han_in_blockquotes=info.get("allow_han_in_blockquotes", False),
         require_markdown=info.get("require_markdown", False),
         required_blocks=tuple(required_blocks),
+        required_strong_texts=tuple(value.strip() for value in required_strong_texts),
+        required_link_destinations=tuple(value.strip() for value in required_link_destinations),
     )
 
 

@@ -152,6 +152,8 @@ def validate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "allow_han_in_blockquotes": contract.allow_han_in_blockquotes,
                     "require_markdown": contract.require_markdown,
                     "required_markdown_blocks": list(contract.required_blocks),
+                    "required_strong_texts": list(contract.required_strong_texts),
+                    "required_link_destinations": list(contract.required_link_destinations),
                 },
                 "tags": sorted(set(tags)),
                 "use_for_constraint_rl_smoke": use_for_rl,

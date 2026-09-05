@@ -148,6 +148,12 @@ case "${qualification_profile}" in
       exit 2
     fi
     ;;
+  census-v11-quality-576)
+    if (( steps != 9 || global_batch_size != 64 || max_length != 576 || required_max_tokens != 548 )); then
+      echo "census-v11-quality-576 requires STEPS=9, GLOBAL_BATCH_SIZE=64, MAX_LENGTH=576, REQUIRED_MAX_TOKENS=548" >&2
+      exit 2
+    fi
+    ;;
   *)
     echo "unknown QUALIFICATION_PROFILE: ${qualification_profile}" >&2
     exit 2
