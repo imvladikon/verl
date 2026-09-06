@@ -687,6 +687,25 @@ def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinit
     return total_norm
 
 
+def _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names) -> bool:
+    """Identify this unit's adapters without unsharding any parameters.
+
+    FSDP1 with use_orig_params=False hides original parameter names behind a
+    FlatParameter. Its FQN metadata belongs to this unit, excluding nested FSDP
+    units, and remains available outside summon_full_params. Plain parameters
+    and FSDP2 retain their ordinary names.
+    """
+    if "lora_" in clean_prefix:
+        return True
+    for name, param in submodule.named_parameters():
+        if any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names):
+            continue
+        original_names = getattr(param, "_fqns", None) or (name,)
+        if any("lora_" in original_name for original_name in original_names):
+            return True
+    return False
+
+
 def layered_summon_lora_params(fsdp_module) -> OrderedDict:
     """Collect LoRA params one FSDP unit at a time to keep peak GPU memory low.
 
@@ -695,10 +714,9 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
     expert) — including MoE models where wrap typically lands at
     ``layers.<i>.mlp`` rather than the transformer-layer level.
 
-    Safe with nested units: ``submodule.state_dict()`` returns gathered tensors
-    for the unit being summoned but only sharded tensors for nested children.
-    Sharded entries collected first get overwritten when the child unit is
-    summoned later, so every LoRA tensor is gathered exactly once.
+    Summon only the current unit (recurse=False). Nested children remain
+    sharded and are visited independently; filtering their names alone would
+    not prevent a recursive summon from materializing them first.
     """
     lora_params = OrderedDict()
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
@@ -723,18 +741,13 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
         # their params are not gathered here and again when their own unit is visited.
         nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
 
-        direct_param_names = [
-            f"{clean_prefix}.{name.replace('_fsdp_wrapped_module.', '')}"
-            for name, _ in submodule.named_parameters()
-            if not any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
-        ]
-        if "lora_" not in clean_prefix and not any("lora_" in name for name in direct_param_names):
+        if not _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names):
             continue
 
         previous_is_root = getattr(submodule, "_is_root", None)
         if is_fsdp1:
             submodule._is_root = True
-        summon_ctx = FSDP.summon_full_params(submodule, writeback=False) if is_fsdp1 else nullcontext()
+        summon_ctx = FSDP.summon_full_params(submodule, recurse=False, writeback=False) if is_fsdp1 else nullcontext()
 
         try:
             with summon_ctx:
@@ -804,12 +817,7 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
             continue
         clean_prefix = name.replace("_fsdp_wrapped_module.", "")
         nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
-        direct_param_names = [
-            f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}"
-            for param_name, _ in submodule.named_parameters()
-            if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
-        ]
-        if "lora_" not in clean_prefix and not any("lora_" in param_name for param_name in direct_param_names):
+        if not _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names):
             continue
 
         previous_is_root = getattr(submodule, "_is_root", None)
