@@ -104,6 +104,30 @@ def count_adapter_parameters(model):
     return adapter_params, total_params, percentage
 
 
+def freeze_peft_router_expert_bias(model) -> int:
+    """Keep the pretrained routing bias fixed in adapter-only training.
+
+    MCore updates ``expert_bias`` from token counts outside the optimizer, so
+    freezing base parameters does not freeze this buffer. Adapter checkpoints
+    and rollout updates omit it. Use MCore's update guard without disabling the
+    bias in forward routing or changing its pretrained values. Call only after
+    validating the PEFT trainable set, never for full-parameter training.
+    """
+    routers = {}
+    for chunk in _unwrapped_chunks(model):
+        for module in chunk.modules():
+            if getattr(module, "expert_bias", None) is not None:
+                if not hasattr(module, "frozen_expert_bias"):
+                    raise RuntimeError(
+                        "Adapter-only MoE training requires MCore's frozen_expert_bias update guard; "
+                        "upgrade Megatron-Core rather than silently changing the frozen base model."
+                    )
+                routers[id(module)] = module
+    for router in routers.values():
+        router.frozen_expert_bias = True
+    return len(routers)
+
+
 def print_adapter_info(model):
     """Print information about adapter parameters in the model."""
     summary = summarize_peft_parameters(model)
@@ -149,5 +173,6 @@ __all__ = [
     "print_adapter_info",
     "summarize_peft_parameters",
     "validate_peft_trainable_parameters",
+    "freeze_peft_router_expert_bias",
     "build_peft_config_for_vllm",
 ]

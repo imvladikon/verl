@@ -19,6 +19,7 @@ import pytest
 
 from verl.utils.megatron_peft_utils import (
     count_adapter_parameters,
+    freeze_peft_router_expert_bias,
     summarize_peft_parameters,
     validate_peft_trainable_parameters,
 )
@@ -103,3 +104,71 @@ def test_summarize_peft_parameters_reports_unexpected_trainable_names():
     module = FakeModule([("decoder.layers.4.experts.weight", FakeParameter(37, requires_grad=True))])
 
     assert summarize_peft_parameters(module)["unexpected_trainable"] == ["chunk=0:decoder.layers.4.experts.weight"]
+
+
+class FakeModuleTree:
+    def __init__(self, *children):
+        self.children = children
+
+    def modules(self):
+        return iter(self.children)
+
+
+def test_freeze_router_bias_preserves_values_and_counts_shared_routers_once():
+    bias = [0.25, -0.5]
+    tokens = [3, 1]
+    router = SimpleNamespace(expert_bias=bias, frozen_expert_bias=False, local_tokens_per_expert=tokens)
+    chunks = [FakeModuleTree(router), FakeModuleTree(router)]
+
+    assert freeze_peft_router_expert_bias(chunks) == 1
+    assert router.frozen_expert_bias is True
+    assert router.expert_bias is bias
+    assert router.local_tokens_per_expert is tokens
+    assert bias == [0.25, -0.5]
+    assert freeze_peft_router_expert_bias(chunks) == 1
+
+
+def test_freeze_router_bias_is_noop_for_dense_or_bias_disabled_models():
+    disabled = SimpleNamespace(expert_bias=None, frozen_expert_bias=False)
+    assert freeze_peft_router_expert_bias(FakeModuleTree(SimpleNamespace(), disabled)) == 0
+    assert disabled.frozen_expert_bias is False
+
+
+def test_freeze_router_bias_rejects_missing_native_update_guard_before_any_mutation():
+    supported = SimpleNamespace(expert_bias=[1.0], frozen_expert_bias=False)
+    unsupported = SimpleNamespace(expert_bias=[2.0])
+    with pytest.raises(RuntimeError, match="frozen_expert_bias update guard"):
+        freeze_peft_router_expert_bias(FakeModuleTree(supported, unsupported))
+    assert supported.frozen_expert_bias is False
+
+
+def test_router_freeze_stops_native_mcore_update_without_disabling_bias(tmp_path):
+    torch = pytest.importorskip("torch")
+    finalizer = pytest.importorskip("megatron.core.distributed.finalize_model_grads")
+    if torch.distributed.is_initialized():
+        pytest.skip("This single-rank CPU control owns its process group")
+
+    router = torch.nn.Module()
+    router.register_buffer("expert_bias", torch.tensor([0.25, -0.5]))
+    router.register_buffer("local_tokens_per_expert", torch.tensor([3.0, 1.0]))
+    router.register_parameter("weight", torch.nn.Parameter(torch.ones(2, 2), requires_grad=False))
+    router.frozen_expert_bias = False
+    router.enable_expert_bias = True
+    config = SimpleNamespace(moe_router_bias_update_rate=0.001)
+    before = router.expert_bias.clone()
+
+    torch.distributed.init_process_group("gloo", init_method=f"file://{tmp_path / 'rendezvous'}", rank=0, world_size=1)
+    try:
+        # Frozen parameters alone do not prevent the native update.
+        finalizer._update_router_expert_bias([router], config, torch.distributed.group.WORLD)
+        assert torch.equal(router.expert_bias, before + torch.tensor([-0.001, 0.001]))
+        router.expert_bias.copy_(before)
+
+        assert freeze_peft_router_expert_bias(router) == 1
+        finalizer._update_router_expert_bias([router], config, torch.distributed.group.WORLD)
+        assert torch.equal(router.expert_bias, before)
+        assert router.enable_expert_bias is True
+        assert config.moe_router_bias_update_rate == 0.001
+        assert router.weight.requires_grad is False
+    finally:
+        torch.distributed.destroy_process_group()
