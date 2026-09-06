@@ -16,7 +16,7 @@ import logging
 import os
 from dataclasses import dataclass
 from importlib import import_module
-from inspect import signature
+from inspect import signature, unwrap
 from typing import Optional
 
 import torch
@@ -39,8 +39,44 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 def _call_accepts_kwarg(fn, name: str) -> bool:
-    params = signature(fn).parameters
-    return name in params or any(param.kind == param.VAR_KEYWORD for param in params.values())
+    # A generic **kwargs does not establish packed/CP semantics. In particular,
+    # HF's decorated torch fallbacks accept but ignore cu_seqlens.
+    return name in signature(fn).parameters
+
+
+def _delta_net_kernel(module, name: str, *, use_fast: bool = True):
+    """Resolve the old instance ABI or current genuine kernels/torch functions.
+
+    Do not return a HF causal-conv wrapper as a fast kernel: its fallback takes
+    hidden_states, not x, and has no seq_idx isolation. Explicit None on a
+    legacy causal_conv1d_fn remains a request for the existing slow path.
+    """
+    supported = {"causal_conv1d_fn", "causal_conv1d_update", "chunk_gated_delta_rule", "recurrent_gated_delta_rule"}
+    if name not in supported:
+        raise ValueError(f"Unknown Qwen3.5 delta-net kernel: {name}")
+    if hasattr(module, name):
+        fn = getattr(module, name)
+        if fn is not None or name == "causal_conv1d_fn":
+            return fn
+    if use_fast:
+        package = "causal_conv1d" if name.startswith("causal_conv1d") else "fla.ops.gated_delta_rule"
+        actual_name = "fused_recurrent_gated_delta_rule" if name == "recurrent_gated_delta_rule" else name
+        try:
+            fn = getattr(import_module(package), actual_name, None)
+        except ImportError:
+            fn = None
+        if fn is not None:
+            return fn
+    if name == "causal_conv1d_fn":
+        return None
+    hf_module = import_module("transformers.models.qwen3_5.modeling_qwen3_5")
+    fallback_name = f"torch_{name}" if name.endswith("gated_delta_rule") else name
+    fn = getattr(hf_module, fallback_name, None)
+    if fn is None:
+        raise AttributeError(f"No Qwen3.5 kernel or torch fallback for {name}")
+    # Bypass the optional-kernel dispatcher, whose advertised **kwargs is not
+    # proof of document boundaries. The pure torch rule is split per document.
+    return unwrap(fn)
 
 
 def _prepare_packed_seq_idx(cu_seqlens: torch.LongTensor, cu_seqlens_cpu: Optional[torch.LongTensor]):
@@ -156,6 +192,7 @@ def _packed_causal_conv1d_fallback(
 
 
 def _packed_chunk_gated_delta_rule(self, query, key, value, g, beta, cu_seqlens, cu_seqlens_cpu, cp_context=None):
+    chunk_rule = _delta_net_kernel(self, "chunk_gated_delta_rule", use_fast=query.is_cuda)
     kwargs = {
         "g": g,
         "beta": beta,
@@ -164,19 +201,19 @@ def _packed_chunk_gated_delta_rule(self, query, key, value, g, beta, cu_seqlens,
         "use_qk_l2norm_in_kernel": True,
     }
     if cu_seqlens is None:
-        return self.chunk_gated_delta_rule(query, key, value, **kwargs)
+        return chunk_rule(query, key, value, **kwargs)
 
     if cp_context is not None:
-        if not _call_accepts_kwarg(self.chunk_gated_delta_rule, "cp_context"):
+        if not _call_accepts_kwarg(chunk_rule, "cp_context"):
             raise NotImplementedError("Qwen3.5 Ulysses SP requires FLA chunk_gated_delta_rule cp_context support.")
         kwargs["cp_context"] = cp_context
-        return self.chunk_gated_delta_rule(query, key, value, **kwargs)
+        return chunk_rule(query, key, value, **kwargs)
 
-    if _call_accepts_kwarg(self.chunk_gated_delta_rule, "cu_seqlens"):
+    if _call_accepts_kwarg(chunk_rule, "cu_seqlens"):
         kwargs["cu_seqlens"] = cu_seqlens
-        if _call_accepts_kwarg(self.chunk_gated_delta_rule, "cu_seqlens_cpu"):
+        if _call_accepts_kwarg(chunk_rule, "cu_seqlens_cpu"):
             kwargs["cu_seqlens_cpu"] = cu_seqlens_cpu
-        return self.chunk_gated_delta_rule(query, key, value, **kwargs)
+        return chunk_rule(query, key, value, **kwargs)
 
     outputs = []
     for q_i, k_i, v_i, g_i, beta_i in _split_packed_args(
@@ -185,7 +222,7 @@ def _packed_chunk_gated_delta_rule(self, query, key, value, g, beta, cu_seqlens,
         split_kwargs = dict(kwargs)
         split_kwargs["g"] = g_i
         split_kwargs["beta"] = beta_i
-        out_i, _ = self.chunk_gated_delta_rule(q_i, k_i, v_i, **split_kwargs)
+        out_i, _ = chunk_rule(q_i, k_i, v_i, **split_kwargs)
         outputs.append(out_i)
     return torch.cat(outputs, dim=1), None
 
@@ -239,7 +276,7 @@ def qwen3_5_gated_delta_net_forward(
     a = self.in_proj_a(hidden_states)
 
     if use_precomputed_states:
-        mixed_qkv = self.causal_conv1d_update(
+        mixed_qkv = _delta_net_kernel(self, "causal_conv1d_update", use_fast=hidden_states.is_cuda)(
             mixed_qkv,
             conv_state,
             self.conv1d.weight.squeeze(1),
@@ -250,7 +287,8 @@ def qwen3_5_gated_delta_net_forward(
         if cache_params is not None:
             conv_state = F.pad(mixed_qkv, (self.conv_kernel_size - mixed_qkv.shape[-1], 0))
             cache_params.conv_states[self.layer_idx] = conv_state
-        if self.causal_conv1d_fn is not None:
+        conv_fn = _delta_net_kernel(self, "causal_conv1d_fn", use_fast=hidden_states.is_cuda)
+        if conv_fn is not None:
             conv_prefix_len = 0
             conv_input = mixed_qkv
             if cp_context is not None:
@@ -262,7 +300,7 @@ def qwen3_5_gated_delta_net_forward(
                 if model_cu_seqlens is not None
                 else None
             )
-            conv_output = self.causal_conv1d_fn(
+            conv_output = conv_fn(
                 x=conv_input,
                 weight=self.conv1d.weight.squeeze(1),
                 bias=self.conv1d.bias,
@@ -312,7 +350,9 @@ def qwen3_5_gated_delta_net_forward(
             self, query, key, value, g, beta, model_cu_seqlens, model_cu_seqlens_cpu, cp_context
         )
     else:
-        core_attn_out, last_recurrent_state = self.recurrent_gated_delta_rule(
+        core_attn_out, last_recurrent_state = _delta_net_kernel(
+            self, "recurrent_gated_delta_rule", use_fast=query.is_cuda
+        )(
             query,
             key,
             value,
@@ -350,7 +390,13 @@ def qwen3_5_decoder_layer_forward(
 
     hidden_states = self.input_layernorm(hidden_states)
 
-    if self.layer_type == "linear_attention":
+    block_type = getattr(self, "block_type", None)
+    if block_type is None:
+        block_type = getattr(self, "layer_type", None)
+    if block_type not in ("linear_attention", "full_attention"):
+        raise ValueError(f"Unsupported Qwen3.5 decoder block type {block_type!r}; refusing to skip attention")
+
+    if block_type == "linear_attention":
         hidden_states = self.linear_attn(
             hidden_states=hidden_states,
             cache_params=past_key_values,
@@ -358,7 +404,7 @@ def qwen3_5_decoder_layer_forward(
             cu_seqlens=cu_seqlens,
             cu_seqlens_cpu=cu_seqlens_cpu,
         )
-    elif self.layer_type == "full_attention":
+    elif block_type == "full_attention":
         hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
