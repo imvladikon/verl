@@ -23,6 +23,7 @@ from torch import nn
 from torch.distributed.fsdp import ShardingStrategy
 
 from verl.utils.fsdp_utils import (
+    _fsdp_unit_has_lora,
     collect_lora_params,
     layered_load_lora_params,
     layered_summon_lora_params,
@@ -45,7 +46,7 @@ def test_layered_summon_restores_global_name_before_peft_filtering():
 
     with (
         patch("verl.utils.fsdp_utils.fsdp_version", side_effect=lambda module: int(module is leaf)),
-        patch("verl.utils.fsdp_utils.FSDP.summon_full_params", return_value=nullcontext()),
+        patch("verl.utils.fsdp_utils.FSDP.summon_full_params", return_value=nullcontext()) as summon,
         patch("verl.utils.fsdp_utils.get_peft_model_state_dict", side_effect=fake_peft_state_dict),
     ):
         params = layered_summon_lora_params(root)
@@ -53,6 +54,29 @@ def test_layered_summon_restores_global_name_before_peft_filtering():
     assert list(params) == ["base_model.model.proj.lora_A.weight"]
     assert params["base_model.model.proj.lora_A.weight"].device.type == "cpu"
     assert leaf._is_root is False
+    summon.assert_called_once_with(leaf, recurse=False, writeback=False)
+
+
+def test_flat_unit_identifies_adapter_names_without_gathering():
+    unit = nn.Module()
+    flat = nn.Parameter(torch.ones(12))
+    flat._fqns = ["proj.lora_A.default.weight", "proj.lora_B.default.weight"]
+    unit.register_parameter("_flat_param", flat)
+    assert _fsdp_unit_has_lora("base_model.model.layer", unit, set())
+
+
+def test_flat_unit_does_not_claim_nested_adapters_or_frozen_weights():
+    unit = nn.Module()
+    flat = nn.Parameter(torch.ones(12), requires_grad=False)
+    flat._fqns = ["base_layer.weight"]
+    unit.register_parameter("_flat_param", flat)
+    child = nn.Module()
+    child_flat = nn.Parameter(torch.ones(12))
+    child_flat._fqns = ["proj.lora_A.default.weight"]
+    child.register_parameter("_flat_param", child_flat)
+    unit.add_module("nested", child)
+    assert not _fsdp_unit_has_lora("base_model.model.layer", unit, {"nested"})
+    assert _fsdp_unit_has_lora("base_model.model.layer.lora_A.default", unit, {"nested"})
 
 
 def test_no_shard_collects_adapter_without_summoning_full_params():
