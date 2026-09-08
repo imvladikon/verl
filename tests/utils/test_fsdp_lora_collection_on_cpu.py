@@ -197,3 +197,33 @@ def test_no_shard_fails_if_frozen_parameter_objects_were_already_lost():
         restore_fsdp1_no_shard_frozen_param_views(module)
 
     handle._use_sharded_views.assert_not_called()
+
+
+def test_no_shard_peft_keys_are_portable_and_legacy_wrappers_reload():
+    from peft import LoraConfig, get_peft_model
+    from peft.utils.save_and_load import get_peft_model_state_dict
+
+    from verl.utils.fsdp_utils import _get_peft_state_from_named_parameters
+
+    model = get_peft_model(nn.Sequential(nn.Linear(3, 2)), LoraConfig(r=2, target_modules=["0"]))
+    wrapped = {
+        name.replace(".0.", ".0._fsdp_wrapped_module.").replace(
+            ".default.weight", ".default._fsdp_wrapped_module.weight"
+        ): value
+        for name, value in model.named_parameters()
+    }
+    expected = get_peft_model_state_dict(model)
+    actual = _get_peft_state_from_named_parameters(model, wrapped.items())
+    assert set(actual) == set(expected)
+    assert all("_fsdp_wrapped_module" not in name and ".default." not in name for name in actual)
+    for name in expected:
+        torch.testing.assert_close(actual[name], expected[name])
+
+    legacy = {name: torch.full_like(value, 3.0) for name, value in wrapped.items() if "lora_" in name}
+    root = SimpleNamespace(
+        _fsdp_wrapped_module=model, sharding_strategy=ShardingStrategy.NO_SHARD, _use_orig_params=True
+    )
+    with patch("verl.utils.fsdp_utils.fsdp_version", return_value=1):
+        layered_load_lora_params(root, legacy)
+    for value in get_peft_model_state_dict(model).values():
+        torch.testing.assert_close(value, torch.full_like(value, 3.0))

@@ -784,7 +784,11 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
 
 def _get_peft_state_from_named_parameters(peft_model, named_parameters) -> OrderedDict:
     """Filter an existing parameter iterator without materializing the base state dict."""
-    parameter_state = OrderedDict(named_parameters)
+    # Nested NO_SHARD wrappers remain visible in named_parameters(). Normalize
+    # them before PEFT strips the adapter name and matches LoRA key suffixes.
+    parameter_state = OrderedDict(
+        (name.replace("_fsdp_wrapped_module.", ""), param) for name, param in named_parameters
+    )
     return OrderedDict(get_peft_model_state_dict(peft_model, state_dict=parameter_state))
 
 
@@ -801,6 +805,9 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
         raise NotImplementedError("Layered LoRA checkpoint loading currently supports FSDP1 only")
 
     peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
+    # Accept earlier NO_SHARD checkpoints that retained nested wrapper names.
+    if any("_fsdp_wrapped_module." in name for name in lora_params):
+        lora_params = _get_peft_state_from_named_parameters(peft_model, lora_params.items())
     is_unsharded = getattr(fsdp_module, "sharding_strategy", None) == ShardingStrategy.NO_SHARD
     if is_unsharded and getattr(fsdp_module, "_use_orig_params", False):
         current_params = _get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters())
