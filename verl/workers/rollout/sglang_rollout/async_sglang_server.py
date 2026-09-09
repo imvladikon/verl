@@ -60,6 +60,7 @@ from verl.workers.rollout.sglang_rollout.utils import (
     SGLANG_LORA_NAME,
     lora_rank_of,
     lora_served_as_adapter,
+    merge_visible_devices,
     sglang_lora_target_modules,
 )
 from verl.workers.rollout.utils import get_max_position_embeddings, run_uvicorn
@@ -830,19 +831,7 @@ class SGLangReplica(RolloutReplica):
             node_cuda_visible_devices_set = worker_cuda_visible_devices[
                 node_rank * self.gpus_per_replica_node : (node_rank + 1) * self.gpus_per_replica_node
             ]
-            node_cuda_visible_devices = ",".join(
-                map(
-                    str,
-                    sorted(
-                        set(
-                            int(device)
-                            for worker_devices_set in node_cuda_visible_devices_set
-                            for device in worker_devices_set.split(",")
-                            if device.strip()
-                        )
-                    ),
-                )
-            )
+            node_cuda_visible_devices = merge_visible_devices(node_cuda_visible_devices_set)
 
             node_id = worker_node_ids[node_rank * self.gpus_per_replica_node]
             if self.is_reward_model:

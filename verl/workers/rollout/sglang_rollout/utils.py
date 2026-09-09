@@ -26,6 +26,27 @@ from verl.workers.rollout.utils import ensure_async_iterator
 
 SGLANG_LORA_NAME = "verl_actor_lora_name"
 
+
+def merge_visible_devices(worker_visible_devices: list[str]) -> str:
+    """Combine worker device lists without converting CUDA UUIDs to ordinals.
+
+    Keep the existing numeric ordering for ordinal lists. UUIDs are opaque;
+    preserve their first-seen worker order when constructing the server's list.
+    """
+    devices = list(
+        dict.fromkeys(
+            device.strip()
+            for worker_devices in worker_visible_devices
+            for device in worker_devices.split(",")
+            if device.strip()
+        )
+    )
+    try:
+        return ",".join(map(str, sorted({int(device) for device in devices})))
+    except ValueError:
+        return ",".join(devices)
+
+
 _DEEPSEEK_V4_FUSION_MEMBERS = (
     ("wq_a.weight", "wkv.weight"),
     ("wq_a.scale", "wkv.scale"),
