@@ -108,10 +108,11 @@ mkdir -p "${run_dir}" "${ray_tmpdir}"
   +actor_rollout_ref.rollout.engine_kwargs.sglang.context_length=192 \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.max_total_tokens=256 \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.kv_cache_dtype=bfloat16 \
-  +actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer \
+  +actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=dsa \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.dsa_prefill_backend=torch \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.dsa_decode_backend=torch \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.dsa_topk_backend=torch \
+  +actor_rollout_ref.rollout.engine_kwargs.sglang.dsa_paged_mqa_logits_backend=torch \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.moe_runner_backend=triton \
   +actor_rollout_ref.rollout.engine_kwargs.sglang.enable_weights_cpu_backup=false \
   reward.custom_reward_function.path="${script_dir}/reward.py" \
