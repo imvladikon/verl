@@ -134,8 +134,8 @@ glm53-flash = [
     "torchaudio==2.11.0",
     "transformers==5.16.1",
     "torchao>=0.18",
-    "sglang @ git+https://github.com/imvladikon/sglang.git@glm-5.3-flash#subdirectory=python",
-    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@glm-5.3-flash",
+    "sglang @ git+https://github.com/imvladikon/sglang.git@5d24abc2ac9dcdd1dc57cc39309147521f8f9d4b#subdirectory=python",
+    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@59e64c7356a1cd85dbf6ff55c27526825bf0634e",
 ]
 
 # AutoModel SFT is isolated from the SGLang rollout environment because the
@@ -147,7 +147,7 @@ glm53-automodel = [
     "torchvision==0.28.0",
     "transformers==5.16.1",
     "nemo-automodel @ git+https://github.com/NVIDIA-NeMo/Automodel.git@9228f33cf73d66a9b2e84256d298aac9a70283f0",
-    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@glm-5.3-flash",
+    "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@59e64c7356a1cd85dbf6ff55c27526825bf0634e",
 ]
 
 # DEFERRED — trtllm is a CUDA-13 backend (torch 2.10.0+cu130, conflict-gated).
@@ -512,8 +512,8 @@ mbridge = { git = "https://github.com/ISEEKYAN/mbridge.git", rev = "641a5a0" }
 megatron-core = [
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "megatron" },
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "cpu" },
-    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "glm-5.3-flash", extra = "glm53-flash" },
-    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "glm-5.3-flash", extra = "glm53-automodel" },
+    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "59e64c7356a1cd85dbf6ff55c27526825bf0634e", extra = "glm53-flash" },
+    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "59e64c7356a1cd85dbf6ff55c27526825bf0634e", extra = "glm53-automodel" },
 ]
 
 # Per-extra routing to the matching pytorch wheel index.

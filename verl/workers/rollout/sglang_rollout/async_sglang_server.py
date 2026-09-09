@@ -55,7 +55,10 @@ from verl.utils.profiler import (
 from verl.utils.tracking import RLInsightLogger
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import RolloutMode, RolloutReplica, TokenOutput
-from verl.workers.rollout.sglang_rollout.sglang_rollout import _set_envs_and_config
+from verl.workers.rollout.sglang_rollout.sglang_rollout import (
+    _assert_sglang_weight_sync_capabilities,
+    _set_envs_and_config,
+)
 from verl.workers.rollout.sglang_rollout.utils import (
     SGLANG_LORA_NAME,
     lora_rank_of,
@@ -325,9 +328,7 @@ class SGLangHttpServer:
             if quantization == "fp8":
                 from verl.utils.sglang.sglang_fp8_utils import build_sglang_fp8_quant_config
 
-                assert version.parse(sglang.__version__) >= version.parse("0.5.5"), (
-                    "sglang>=0.5.5 is required for FP8 quantization"
-                )
+                _assert_sglang_weight_sync_capabilities()
                 fp8_block_quant_kwargs = build_sglang_fp8_quant_config(self.model_config.hf_config)
             else:
                 raise ValueError(f"Currently only support fp8 quantization, got: {quantization}")

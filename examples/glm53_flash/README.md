@@ -12,14 +12,14 @@ The two environments are intentionally separate. Current AutoModel and SGLang
 require incompatible CUDA-kernel dependency stacks, so combining them in one
 extra would hide ABI conflicts rather than make the lifecycle reproducible.
 
-## Tracked sources
+## Pinned sources
 
-- SGLang: `imvladikon/sglang@glm-5.3-flash`
-- Megatron-Core: `imvladikon/Megatron-LM@glm-5.3-flash`
+- SGLang: `imvladikon/sglang@5d24abc2ac9dcdd1dc57cc39309147521f8f9d4b`
+- Megatron-Core: `imvladikon/Megatron-LM@59e64c7356a1cd85dbf6ff55c27526825bf0634e`
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
 
-`uv.lock` records the exact commit resolved from each tracked branch, and the
-provenance gate compares the active installation with that locked commit.
+The dependency declarations and `uv.lock` both name immutable commits. The
+provenance gate compares the active installation with the locked commit.
 
 The authoritative model contract is
 [`zai-org/GLM-5.3-Flash`](https://huggingface.co/zai-org/GLM-5.3-Flash).
@@ -104,7 +104,7 @@ the distributed gradient is finite and nonzero, and the optimizer changes the
 shards. This CPU gate isolates FSDP correctness; it is not a substitute for a
 multi-GPU TP/EP throughput test.
 
-Megatron-Core is branch-tracked because it is a dependency of the supported
+Megatron-Core is commit-pinned because it is a dependency of the supported
 stacks and its GLM mHC/recompute/routing-replay changes are tested in that
 fork. This example does not claim an end-to-end Megatron actor: that path also
 needs a GLM-5.3-Flash Megatron-Bridge model provider and checkpoint mapping.

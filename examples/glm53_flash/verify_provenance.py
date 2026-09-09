@@ -18,13 +18,13 @@ EXPECTED = {
         "distribution": "sglang",
         "module": "sglang",
         "url": "https://github.com/imvladikon/sglang.git",
-        "ref": "glm-5.3-flash",
+        "ref": "5d24abc2ac9dcdd1dc57cc39309147521f8f9d4b",
     },
     "megatron": {
         "distribution": "megatron-core",
         "module": "megatron.core.package_info",
         "url": "https://github.com/imvladikon/Megatron-LM.git",
-        "ref": "glm-5.3-flash",
+        "ref": "59e64c7356a1cd85dbf6ff55c27526825bf0634e",
     },
     "automodel": {
         "distribution": "nemo-automodel",
