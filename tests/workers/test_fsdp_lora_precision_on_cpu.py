@@ -6,7 +6,7 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from verl.workers.engine.fsdp.transformer_impl import FSDPEngine
+from verl.workers.engine.fsdp.transformer_impl import FSDPEngine, _cast_model_dtype_preserving_fp32_buffers
 
 
 @pytest.mark.parametrize("strategy,adapter_dtype", [("fsdp", torch.bfloat16), ("fsdp2", torch.float32)])
@@ -52,3 +52,33 @@ def test_lora_storage_precision_and_effective_updates(strategy, adapter_dtype):
         optimizer.step()
     assert any(not torch.equal(initial[name], p) for name, p in trainable)
     assert all(not p.requires_grad and p.grad is None and torch.equal(p, value) for p, value in frozen)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_model_cast_preserves_exact_fp32_buffers_and_persistence(dtype):
+    config = LlamaConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        max_position_embeddings=32,
+    )
+    model = LlamaForCausalLM(config)
+    bias = torch.tensor([0.123456789, 1e-8], dtype=torch.float32)
+    model.register_buffer("routing_bias", bias)
+    model.register_buffer("routing_bias_alias", bias, persistent=False)
+    model.register_buffer("counter", torch.tensor([2**40], dtype=torch.int64))
+    buffers = {name: value.clone() for name, value in model.named_buffers(remove_duplicate=False)}
+    state_keys = set(model.state_dict())
+    assert any(not torch.equal(value, value.to(dtype).float()) for value in buffers.values() if value.is_floating_point())
+
+    result = _cast_model_dtype_preserving_fp32_buffers(model, dtype)
+
+    assert result is model and all(p.dtype == dtype for p in model.parameters())
+    assert model.routing_bias is model.routing_bias_alias
+    assert set(model.state_dict()) == state_keys
+    assert "routing_bias" in state_keys and "routing_bias_alias" not in state_keys
+    for name, value in model.named_buffers(remove_duplicate=False):
+        assert value.dtype == buffers[name].dtype and torch.equal(value, buffers[name])
