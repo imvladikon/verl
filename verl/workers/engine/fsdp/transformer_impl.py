@@ -84,6 +84,22 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 device_name = get_device_name()
 
 
+def _cast_model_dtype_preserving_fp32_buffers(module, dtype):
+    """Keep HF's FP32 buffers exact while normalizing parameter storage dtype."""
+    fp32_buffers = [
+        (owner, name, buffer)
+        for owner in module.modules()
+        for name, buffer in owner._buffers.items()
+        if buffer is not None and buffer.dtype == torch.float32
+    ]
+    module.to(dtype)
+    # Module.to replaces buffer tensors. Retain their original values, aliases,
+    # and persistence flags instead of widening already-rounded BF16 values.
+    for owner, name, buffer in fp32_buffers:
+        owner._buffers[name] = buffer
+    return module
+
+
 def _is_scalar_unit_temperature(temperature) -> bool:
     """Return whether a host scalar temperature makes scaling a no-op."""
 
@@ -324,8 +340,9 @@ class FSDPEngine(BaseEngine):
                 fused_kernels_backend=fused_kernels_backend,
             )
 
-            # some parameters may not in torch_dtype
-            module.to(torch_dtype)
+            # Normalize parameter storage without rounding FP32 RoPE frequencies
+            # or model-specific buffers such as GLM's routing correction bias.
+            _cast_model_dtype_preserving_fp32_buffers(module, torch_dtype)
 
             if self.model_config.enable_gradient_checkpointing:
                 module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
