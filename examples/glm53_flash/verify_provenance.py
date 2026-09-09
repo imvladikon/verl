@@ -81,10 +81,44 @@ def _checkout_provenance(module: str) -> dict[str, str] | None:
     return None
 
 
+def _source_archive_provenance(module: str) -> dict[str, str] | None:
+    """Read provenance embedded next to source-only cluster archives.
+
+    Nirvana workers have no GitHub egress, so qualification bundles contain
+    exported source trees without ``.git``.  The deterministic packer writes a
+    ``.source-provenance.json`` file at each tree root; accepting it here keeps
+    the runtime gate fail-closed without requiring a network checkout.
+    """
+    spec = importlib.util.find_spec(module)
+    if spec is None or spec.origin is None:
+        raise RuntimeError(f"Cannot locate required module {module!r}")
+    origin = Path(spec.origin).resolve()
+    for candidate in (origin.parent, *origin.parents):
+        provenance_path = candidate / ".source-provenance.json"
+        if not provenance_path.is_file():
+            continue
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        repository = provenance.get("repository", "")
+        commit = provenance.get("commit", "")
+        if not repository or not commit:
+            raise RuntimeError(f"Incomplete source provenance in {provenance_path}")
+        return {
+            "kind": "source-archive",
+            "module_path": str(origin),
+            "root": str(candidate),
+            "url": repository,
+            "commit": commit,
+        }
+    return None
+
+
 def _installed_provenance(distribution: str, module: str) -> dict[str, str]:
     checkout = _checkout_provenance(module)
     if checkout is not None:
         return checkout
+    source_archive = _source_archive_provenance(module)
+    if source_archive is not None:
+        return source_archive
 
     dist = importlib.metadata.distribution(distribution)
     direct_url_text = dist.read_text("direct_url.json")
