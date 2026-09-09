@@ -54,8 +54,8 @@ The tiny checkpoint must preserve the production architecture contracts that
 matter here: `Glm5NextForConditionalGeneration`, KDA and DSA layers, mHC,
 routed MoE plus router, and the vision tower. Passing this gate proves that
 those paths load, backpropagate, update, checkpoint, roll out, and accept
-weight refreshes. It does not by itself prove the memory fit of the 744B
-production checkpoint; that requires a separate topology and memory budget.
+weight refreshes. It does not by itself prove the memory fit of the 320B
+GLM-5.3-Flash checkpoint; that requires a separate topology and memory budget.
 
 ## One-GPU 9B surgery smoke
 
@@ -85,7 +85,7 @@ sync.
 
 The script intentionally does not save checkpoints: each BF16 actor snapshot
 is about 18 GB. It is a one-GPU integration and gradient-flow smoke, not an
-optimizer recommendation for the 744B production model. Production training
+optimizer recommendation for the 320B production model. Production training
 needs a sharded optimizer with an explicit master-weight/rounding policy and a
 separate TP/EP memory qualification.
 
