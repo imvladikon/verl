@@ -779,6 +779,39 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
                 submodule._is_root = previous_is_root
         get_torch_device().empty_cache()
 
+    # Root is skipped above because a recursive summon there would materialize
+    # the whole model. Its OWN parameters still have to be exported: with some
+    # wrap policies part of the adapter lives at root, and a partial export is
+    # not empty, so an "exported nothing" guard does not catch it. recurse=False
+    # keeps this bounded to root's own flat parameter.
+    expected = set(_get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters()))
+    missing = expected - set(lora_params)
+    if missing:
+        nested_fsdp_names = {n for n, m in fsdp_module.named_modules() if n != "" and fsdp_version(m) > 0}
+        is_fsdp1 = fsdp_version(fsdp_module) == 1
+        summon_ctx = (
+            FSDP.summon_full_params(fsdp_module, recurse=False, writeback=False) if is_fsdp1 else nullcontext()
+        )
+        with summon_ctx:
+            root_params = {
+                name.replace("_fsdp_wrapped_module.", ""): param
+                for name, param in fsdp_module.named_parameters()
+                if not any(
+                    name.replace("_fsdp_wrapped_module.", "").startswith(f"{nested}.")
+                    for nested in nested_fsdp_names
+                )
+            }
+            for key, param in get_peft_model_state_dict(peft_model, state_dict=root_params).items():
+                if key in missing:
+                    lora_params[key] = (
+                        param.full_tensor().detach().cpu() if hasattr(param, "full_tensor") else param.detach().cpu()
+                    )
+        get_torch_device().empty_cache()
+
+    still_missing = expected - set(lora_params)
+    if still_missing:
+        raise ValueError(f"LoRA export is incomplete, adapter parameters not collected: {sorted(still_missing)}")
+
     return lora_params
 
 
@@ -808,48 +841,100 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
     # Accept earlier NO_SHARD checkpoints that retained nested wrapper names.
     if any("_fsdp_wrapped_module." in name for name in lora_params):
         lora_params = _get_peft_state_from_named_parameters(peft_model, lora_params.items())
+    # The adapter names are readable from the sharded parameters, so the
+    # completeness check costs nothing and happens before any write. Checking
+    # only "incoming keys we did not consume" accepts a checkpoint that is
+    # missing half the adapter and leaves those factors at their init values —
+    # a silently wrong model rather than a failed load.
+    expected = set(_get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters()))
+    incoming = set(lora_params)
+    problems = []
+    if expected - incoming:
+        problems.append(f"checkpoint is missing adapter parameters: {sorted(expected - incoming)}")
+    if incoming - expected:
+        problems.append(f"checkpoint has unknown adapter parameters: {sorted(incoming - expected)}")
+    if problems:
+        raise ValueError("LoRA checkpoint does not match the active adapter: " + "; ".join(problems))
+
     is_unsharded = getattr(fsdp_module, "sharding_strategy", None) == ShardingStrategy.NO_SHARD
     if is_unsharded and getattr(fsdp_module, "_use_orig_params", False):
         current_params = _get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters())
-        missing = set(lora_params).difference(current_params)
-        if missing:
-            raise ValueError(f"LoRA checkpoint contains unknown adapter parameters: {sorted(missing)}")
+        _check_lora_shapes(current_params, lora_params)
         for name, value in lora_params.items():
             current_params[name].copy_(value.to(device=current_params[name].device, dtype=current_params[name].dtype))
         return
 
-    loaded = set()
-    for name, submodule in fsdp_module.named_modules():
-        if name == "" or fsdp_version(submodule) == 0:
-            continue
-        clean_prefix = name.replace("_fsdp_wrapped_module.", "")
-        nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
-        if not _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names):
-            continue
+    def _visit(consume):
+        """Walk the adapter FSDP units once, handing each unit's params to `consume`."""
+        seen = set()
+        for name, submodule in fsdp_module.named_modules():
+            if name == "" or fsdp_version(submodule) == 0:
+                continue
+            clean_prefix = name.replace("_fsdp_wrapped_module.", "")
+            nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
+            if not _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names):
+                continue
 
-        previous_is_root = getattr(submodule, "_is_root", None)
-        submodule._is_root = True
-        try:
-            with FSDP.summon_full_params(submodule, recurse=False, writeback=True):
-                direct_params = {
-                    f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}": param
-                    for param_name, param in submodule.named_parameters()
-                    if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
-                }
-                current_params = _get_peft_state_from_named_parameters(peft_model, direct_params.items())
-                for param_name in sorted(current_params.keys() & lora_params.keys()):
-                    current_param = current_params[param_name]
-                    current_param.copy_(
-                        lora_params[param_name].to(device=current_param.device, dtype=current_param.dtype)
-                    )
-                    loaded.add(param_name)
-        finally:
-            submodule._is_root = previous_is_root
-        get_torch_device().empty_cache()
+            previous_is_root = getattr(submodule, "_is_root", None)
+            submodule._is_root = True
+            try:
+                # writeback only in the copy pass; the check pass must not write.
+                with FSDP.summon_full_params(submodule, recurse=False, writeback=consume.writes):
+                    direct_params = {
+                        f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}": param
+                        for param_name, param in submodule.named_parameters()
+                        if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+                    }
+                    current_params = _get_peft_state_from_named_parameters(peft_model, direct_params.items())
+                    seen.update(consume(current_params))
+            finally:
+                submodule._is_root = previous_is_root
+            get_torch_device().empty_cache()
+        return seen
 
-    missing = set(lora_params).difference(loaded)
-    if missing:
-        raise ValueError(f"LoRA checkpoint contains unknown adapter parameters: {sorted(missing)}")
+    # Two passes on purpose. Shapes are only visible inside a summon, and a
+    # mismatch found halfway through a single pass would leave the adapter
+    # partly overwritten. Each unit is summoned twice with recurse=False, so
+    # peak memory is unchanged — no full-model summon.
+    def check(current_params):
+        _check_lora_shapes(current_params, lora_params)
+        return current_params.keys() & lora_params.keys()
+
+    check.writes = False
+    checked = _visit(check)
+
+    unreachable = incoming - checked
+    if unreachable:
+        raise ValueError(
+            "LoRA checkpoint has parameters that no adapter FSDP unit owns: " f"{sorted(unreachable)}"
+        )
+
+    def copy(current_params):
+        loaded = set()
+        for param_name in sorted(current_params.keys() & lora_params.keys()):
+            current_param = current_params[param_name]
+            current_param.copy_(lora_params[param_name].to(device=current_param.device, dtype=current_param.dtype))
+            loaded.add(param_name)
+        return loaded
+
+    copy.writes = True
+    _visit(copy)
+
+
+def _check_lora_shapes(current_params, lora_params):
+    """Reject a shape mismatch before copying.
+
+    ``Tensor.copy_`` broadcasts, so a scalar or a transposed factor is accepted
+    silently and fills the whole matrix with the wrong values.
+    """
+    mismatched = [
+        (name, tuple(lora_params[name].shape), tuple(current_params[name].shape))
+        for name in sorted(current_params.keys() & lora_params.keys())
+        if tuple(lora_params[name].shape) != tuple(current_params[name].shape)
+    ]
+    if mismatched:
+        detail = ", ".join(f"{name}: checkpoint {got} vs adapter {want}" for name, got, want in mismatched)
+        raise ValueError(f"LoRA checkpoint tensor shapes do not match the adapter: {detail}")
 
 
 def collect_lora_params(
