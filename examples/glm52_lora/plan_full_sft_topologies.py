@@ -54,6 +54,14 @@ def analyze_topology(
         require(value > 0, f"{name} must be positive")
     require(device_capacity_gib > 0, "device capacity must be positive")
     require(minimum_additional_headroom_gib >= 0, "extra headroom cannot be negative")
+    # PP and CP take part in the grid checks below, but estimate() has no notion
+    # of either and always reports a PP=CP=1 layout. Accepting them would hand
+    # back a number for a topology the memory model never described. Covering
+    # them needs stage-local layer sets and the activation layout, not a factor.
+    require(
+        pp == 1 and cp == 1,
+        f"this memory model covers PP=CP=1 only, got PP={pp}, CP={cp}",
+    )
 
     dense_grid = tp * pp * cp
     expert_grid = etp * ep * pp
