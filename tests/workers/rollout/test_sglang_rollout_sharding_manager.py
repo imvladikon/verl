@@ -183,3 +183,42 @@ async def test_server_adapter_finalizes_quantized_reload_after_all_buckets(monke
         {"names": [], "flush_cache": True},
     ]
     assert adapter._engine.flush_count == 1
+
+
+@pytest.mark.asyncio
+async def test_server_adapter_nonleader_consumes_lora_generator(monkeypatch):
+    """Every TP rank must enter export collectives even if only rank 0 sends."""
+
+    class NonLeaderMesh:
+        def __getitem__(self, key):
+            assert key == "infer_tp"
+            return self
+
+        @staticmethod
+        def get_local_rank():
+            return 1
+
+    class UnreachableEngine:
+        def __getattr__(self, name):
+            raise AssertionError(f"non-leader must not call the SGLang engine: {name}")
+
+    async def already_initialized(self):
+        return None
+
+    monkeypatch.setattr(sglang_rollout.ServerAdapter, "_init_server_adapter", already_initialized)
+
+    consumed = []
+
+    def adapter_weights():
+        for index in range(3):
+            consumed.append(index)
+            yield f"adapter.{index}", torch.tensor(index)
+
+    adapter = sglang_rollout.ServerAdapter.__new__(sglang_rollout.ServerAdapter)
+    adapter.device_mesh = NonLeaderMesh()
+    adapter._engine = UnreachableEngine()
+    adapter._pd_role = None
+
+    await adapter.update_weights(adapter_weights(), peft_config={"r": 16}, base_sync_done=True)
+
+    assert consumed == [0, 1, 2]

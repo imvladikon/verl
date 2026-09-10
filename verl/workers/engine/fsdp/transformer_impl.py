@@ -377,8 +377,20 @@ class FSDPEngine(BaseEngine):
                 "target_parameters": convert_to_regular_types(self.model_config.target_parameters),
                 "exclude_modules": convert_to_regular_types(self.model_config.exclude_modules),
                 "bias": "none",
+                "ensure_weight_tying": bool(getattr(module.config, "tie_word_embeddings", False)),
             }
-            module = get_peft_model(module, LoraConfig(**lora_config))
+            # Transformers v5 models declare potential ties in
+            # ``_tied_weights_keys`` even when ``tie_word_embeddings=False``.
+            # PEFT intentionally does not consult the config and otherwise
+            # emits a false warning when an untied lm_head is a LoRA target.
+            with warnings.catch_warnings():
+                if not lora_config["ensure_weight_tying"]:
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r"Model has `tie_word_embeddings=True` and a tied layer.*",
+                        category=UserWarning,
+                    )
+                module = get_peft_model(module, LoraConfig(**lora_config))
 
             # FSDP1 requires one dtype per flat parameter group. FSDP2 shards
             # parameters separately, so retain PEFT's fp32 adapter storage.

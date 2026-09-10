@@ -204,6 +204,11 @@ class ReplayBuffer:
             partition = self.partitions[partition_id]
             for key, tag in items.items():
                 if tag.get("is_prompt", False):
+                    if tag.get("fatal_error") == "rollout_actor_died":
+                        raise RuntimeError(
+                            f"Rollout actor died permanently while generating prompt {key}; "
+                            "aborting instead of refilling failed groups."
+                        )
                     # see: [GRPO group sampling control]
                     self.prompt_global_steps[partition_id][key] = tag["global_steps"]
                     match tag["status"]:

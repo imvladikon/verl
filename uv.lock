@@ -7065,6 +7065,8 @@ requires-dist = [
     { name = "kernels", marker = "extra == 'sglang'", specifier = ">=0.12.0,<0.13" },
     { name = "liger-kernel", marker = "extra == 'fsdp'", specifier = ">=0.8.2" },
     { name = "liger-kernel", marker = "extra == 'megatron'", specifier = ">=0.8.2" },
+    { name = "markdown-it-py" },
+    { name = "markdown-it-py", marker = "extra == 'verl-core'" },
     { name = "math-verify", marker = "extra == 'math'" },
     { name = "mathruler" },
     { name = "mathruler", marker = "extra == 'verl-core'" },

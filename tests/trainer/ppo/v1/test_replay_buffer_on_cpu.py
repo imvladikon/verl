@@ -1286,3 +1286,18 @@ def test_wait_for_sampleable_replaces_groups_sample_would_have_evicted(tq_init, 
         assert _uids_of(batch.keys) == {refiller.produced_uids[0]}
     finally:
         _clear_partition(partition_id)
+
+
+@pytest.mark.parametrize("trainer_mode", ["sync", "async"])
+def test_permanent_rollout_death_aborts_before_refill(tq_init, partition_id, trainer_mode):
+    refills = []
+    rb = _make_rb(trainer_mode=trainer_mode, refill_fn=lambda count: refills.append(count),
+                  sync_refill_failed_groups=True)
+    uid = _uid()
+    tq.kv_put(key=uid, partition_id=partition_id,
+              tag={"is_prompt": True, "global_steps": 0, "status": "failure",
+                   "fatal_error": "rollout_actor_died"})
+    with pytest.raises(RuntimeError, match="Rollout actor died permanently"):
+        rb.sample(global_steps=0, partition_id=partition_id, batch_size=1)
+    assert refills == []
+    assert tq.kv_list()[partition_id][uid]["fatal_error"] == "rollout_actor_died"

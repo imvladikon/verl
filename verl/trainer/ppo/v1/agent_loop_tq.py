@@ -49,6 +49,14 @@ async def _settle_session_tasks(tasks: list[asyncio.Task[Any]]) -> list[BaseExce
     return [result for result in results if isinstance(result, BaseException)]
 
 
+def _terminal_prompt_tag(errors: list[BaseException]) -> dict[str, str]:
+    """Preserve recoverable group failures, but surface a permanently dead actor."""
+    tag = {"status": "failure" if errors else "finished"}
+    if any(isinstance(error, ray.exceptions.ActorDiedError) for error in errors):
+        tag["fatal_error"] = "rollout_actor_died"
+    return tag
+
+
 @ray.remote
 class AgentLoopWorkerTQ(AgentLoopWorker):
     def __init__(self, *args, **kwargs):
@@ -137,15 +145,13 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
                         f"Error in _run_prompt for uid={uid}",
                         exc_info=(type(error), error, error.__traceback__),
                     )
-                status = "failure"
-            else:
-                status = "finished"
-            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": status})
+            await tq.async_kv_put(key=uid, partition_id=partition_id, tag=_terminal_prompt_tag(session_errors))
         except Exception as e:
             logger.exception(f"Error in _run_prompt: {e}")
+            errors = [e]
             if tasks:
-                await _settle_session_tasks(tasks)
-            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+                errors.extend(await _settle_session_tasks(tasks))
+            await tq.async_kv_put(key=uid, partition_id=partition_id, tag=_terminal_prompt_tag(errors))
 
     async def _agent_loop_postprocess(
         self, output: AgentLoopOutput | list[AgentLoopOutput], validate, **kwargs

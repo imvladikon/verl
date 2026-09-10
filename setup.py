@@ -29,6 +29,7 @@ install_requires = [
     "datasets",
     "dill",
     "hydra-core",
+    "markdown-it-py",
     "numpy>=2.0.0",
     "pandas",
     "peft",
@@ -42,8 +43,9 @@ install_requires = [
     # fallback aligned with the verl-core dependency in pyproject.toml.
     "TransferQueue @ git+https://github.com/Ascend/TransferQueue.git@main",
     # 5.6.0 ships a broken flash-attention path (crashes on s_aux=None for
-    # sink-less models); fixed in 5.6.1. The GLM-5.3-Flash runtime is qualified
-    # on 5.16.1. See huggingface/transformers#45588.
+    # sink-less models); fixed in 5.6.1. Both GLM lines are qualified on 5.16.1:
+    # the GLM-5.3-Flash runtime, and GLM-MoE-DSA training together with the
+    # matching SGLang rollout. See huggingface/transformers#45588.
     "transformers>=5.5.3,!=5.6.0,<=5.16.1",
     "wandb",
     "packaging>=20.0",

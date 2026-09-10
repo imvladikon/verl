@@ -1,0 +1,167 @@
+import sys
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "examples" / "glm52_lora"))
+
+from verify_full_sft_config import (  # noqa: E402
+    EXPECTED_EP_GATE_SHA256,
+    EXPECTED_TP_EP_GATE_SHA256,
+    EXPECTED_TP_GATE_SHA256,
+    LORA_PROFILES,
+    compute_parallel_topology,
+    file_count,
+)
+
+
+def valid_topology_config() -> dict:
+    return {
+        "engine": {
+            "tensor_model_parallel_size": 8,
+            "expert_model_parallel_size": 32,
+            "expert_tensor_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "sequence_parallel": True,
+        },
+        "trainer": {"nnodes": 8, "n_gpus_per_node": 8},
+    }
+
+
+def test_full_topology_uses_independent_dense_and_expert_grids() -> None:
+    result = compute_parallel_topology(valid_topology_config())
+    assert result == {
+        "nodes": 8,
+        "gpus_per_node": 8,
+        "world_size": 64,
+        "tp": 8,
+        "ep": 32,
+        "etp": 1,
+        "pp": 1,
+        "cp": 1,
+        "dense_dp": 8,
+        "expert_dp": 2,
+        "experts_per_ep_rank": 8,
+    }
+
+
+def test_full_topology_supports_w128_tp8_ep128_candidate() -> None:
+    config = valid_topology_config()
+    config["trainer"]["nnodes"] = 16
+    config["engine"]["expert_model_parallel_size"] = 128
+    result = compute_parallel_topology(config)
+    assert result["world_size"] == 128
+    assert result["dense_dp"] == 16
+    assert result["expert_dp"] == 1
+    assert result["experts_per_ep_rank"] == 2
+
+
+def test_full_topology_rejects_invalid_dense_grid() -> None:
+    config = deepcopy(valid_topology_config())
+    config["engine"]["tensor_model_parallel_size"] = 3
+    with pytest.raises(SystemExit, match=r"dense TP\*PP\*CP grid 3"):
+        compute_parallel_topology(config)
+
+
+def test_full_topology_rejects_invalid_expert_grid() -> None:
+    config = deepcopy(valid_topology_config())
+    config["engine"]["expert_tensor_parallel_size"] = 3
+    with pytest.raises(SystemExit, match=r"expert ETP\*EP\*PP grid 96"):
+        compute_parallel_topology(config)
+
+
+def test_full_topology_rejects_nonintegral_expert_ownership() -> None:
+    config = deepcopy(valid_topology_config())
+    config["engine"]["expert_model_parallel_size"] = 10
+    config["trainer"] = {"nnodes": 10, "n_gpus_per_node": 8}
+    with pytest.raises(
+        SystemExit, match="256 routed experts are not divisible by EP=10"
+    ):
+        compute_parallel_topology(config)
+
+
+def test_full_topology_requires_sequence_parallel_for_tp_and_ep() -> None:
+    config = deepcopy(valid_topology_config())
+    config["engine"]["sequence_parallel"] = False
+    with pytest.raises(SystemExit, match=r"TP\+EP requires sequence parallel"):
+        compute_parallel_topology(config)
+
+
+def test_full_launch_requires_exact_validated_gate_roots() -> None:
+    launcher = (
+        ROOT / "examples" / "glm52_lora" / "run_full_sft_megatron.sh"
+    ).read_text(encoding="utf-8")
+    assert EXPECTED_TP_GATE_SHA256 in launcher
+    assert EXPECTED_EP_GATE_SHA256 in launcher
+    assert EXPECTED_TP_EP_GATE_SHA256 in launcher
+    assert (
+        '"${TP_ADAPTER_GATE_SHA:-}" != "${expected_tp_adapter_gate_sha256}"' in launcher
+    )
+    assert (
+        '"${EP_ROUTING_GATE_SHA:-}" != "${expected_ep_routing_gate_sha256}"' in launcher
+    )
+    assert (
+        '"${TP_EP_GATE_SHA:-}" != "${expected_tp_ep_gate_sha256}"' in launcher
+    )
+    assert "--require-candidate" in launcher
+    assert 'planner_profile_args=(--include-output-layer)' in launcher
+    assert "refusing non-H200 device" not in launcher
+    assert '--tp "${tp_size}" --ep "${ep_size}" --etp "${etp_size}"' in launcher
+
+
+def test_full_launch_has_two_locked_lora_profiles() -> None:
+    assert LORA_PROFILES == {
+        "mla-only": [
+            "linear_q_down_proj",
+            "linear_q_up_proj",
+            "linear_kv_down_proj",
+            "linear_kv_up_proj",
+            "linear_proj",
+        ],
+        "mla-lm-head": [
+            "linear_q_down_proj",
+            "linear_q_up_proj",
+            "linear_kv_down_proj",
+            "linear_kv_up_proj",
+            "linear_proj",
+            "output_layer",
+        ],
+    }
+    launcher = (
+        ROOT / "examples" / "glm52_lora" / "run_full_sft_megatron.sh"
+    ).read_text(encoding="utf-8")
+    assert "GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_R16" in launcher
+    assert (
+        "GLM52_FULL_W${world_size}_TP${tp_size}_EP${ep_size}_MLA_LM_HEAD_R16"
+        in launcher
+    )
+    assert '"engine.seed=${seed}"' in launcher
+    assert '"trainer.seed=${seed}"' in launcher
+    assert "qualified full-model family requires 8 GPUs/node, TP8, ETP1, PP1, and CP1" in launcher
+    assert 'requires EP in {8,16,32,128}' in launcher
+    assert "official-fp8-dequant" in launcher
+    assert "--official-profile" in launcher
+    assert "expected_bridge_fp8_patch_sha256" in launcher
+    assert "MODEL_SOURCE_IDENTITY" in launcher
+
+    head_wrapper = (
+        ROOT
+        / "examples"
+        / "glm52_lora"
+        / "run_full_sft_mla_lm_head_megatron.sh"
+    ).read_text(encoding="utf-8")
+    assert "export LORA_PROFILE=mla-lm-head" in head_wrapper
+
+
+def test_file_count_normalizes_single_hydra_path() -> None:
+    assert file_count("/data/train.parquet", label="train") == 1
+    assert file_count(["/data/a.parquet", "/data/b.parquet"], label="train") == 2
+
+
+@pytest.mark.parametrize("value", [None, "", ["/data/train.parquet", ""]])
+def test_file_count_rejects_invalid_values(value) -> None:
+    with pytest.raises(SystemExit, match="CONFIG-FAIL"):
+        file_count(value, label="train")
