@@ -14,8 +14,8 @@ extra would hide ABI conflicts rather than make the lifecycle reproducible.
 
 ## Pinned sources
 
-- SGLang: `imvladikon/sglang@5d24abc2ac9dcdd1dc57cc39309147521f8f9d4b`
-- Megatron-Core: `imvladikon/Megatron-LM@59e64c7356a1cd85dbf6ff55c27526825bf0634e`
+- SGLang: `imvladikon/sglang@glm-5.x`
+- Megatron-Core: `imvladikon/Megatron-LM@glm-5.x`
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
 
 The dependency declarations and `uv.lock` both name immutable commits. The
