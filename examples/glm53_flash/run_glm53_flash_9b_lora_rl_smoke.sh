@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Start-up smoke for Flash LoRA RL. It saves only ["model"], so it says nothing
+# about continuing a run: optimizer moments, RNG and the data cursor are not
+# written and cannot be restored. Treat a green result as "the loop starts",
+# not as a qualified RL lane.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)

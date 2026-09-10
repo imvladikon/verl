@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Start-up smoke for Flash LoRA SFT. It establishes that the run starts, takes a
+# couple of steps and reuses optimizer state within one process.
+#
+# It does NOT establish that the pipeline is correct or restartable: save_freq is
+# -1, resume_mode is disable, only ["model"] is saved, truncation is right and
+# input-id mismatches are ignored. Those are fine for a two-step start-up check
+# and wrong as evidence for anything else. For resume, run
+# qualify_glm53_flash_9b_lora_resume.sh instead.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
