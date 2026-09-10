@@ -119,6 +119,27 @@ gradients. Our TP2 save/resume/reload gate and complementary EP2 routed-expert
 gate both passed on that code; their evidence roots are recorded in the main
 README.
 
+One Bridge entry point must not be used to produce a servable checkpoint:
+`AutoBridge.from_auto_config` (what `run_conversion.py export` calls) rebuilds the
+HF config from the Megatron provider through the generic `CONFIG_MAPPING`, which
+pairs HF `max_position_embeddings` with Megatron `seq_length`. Measured on the
+Bridge revision this stack pins, with a provider at `seq_length=8192` and a
+reference config at `max_position_embeddings=1048576`: `GLM5Bridge` (GLM-5/5.1/5.2),
+`GLM45Bridge` and `GLM47FlashBridge` all emit `8192`, none of them overrides
+`megatron_to_hf_config`, and `conform_config_to_reference` keeps the generated
+value because the key exists on both sides. A serving engine then caps
+`max_model_len` at the training length. NVIDIA's fix for the GLM-5 case is open as
+[#5996](https://github.com/NVIDIA-NeMo/Megatron-Bridge/pull/5996) and is not in the
+pinned revision; note that the precedent it cites (Llama, Step3.7) does not
+actually drop the key, so the other two GLM bridges stay affected even after it
+lands.
+
+VERL does not take that path: it asks the bridge for weights only
+(`save_hf_weights` / mbridge `save_weights`) and writes the HF config it loaded
+from the model directory. `TestExportedHFConfigKeepsModelContextLength` in
+`tests/utils/ckpt/test_megatron_checkpoint_manager_on_cpu.py` pins both halves of
+that arrangement.
+
 Baseten's
 [native GLM-5.2 FP8 expert import](https://github.com/basetenlabs/Megatron-Bridge/commit/e6ab3619a95f)
 keeps E4M3 payloads and FP32 inverse scales without dequantizing routed

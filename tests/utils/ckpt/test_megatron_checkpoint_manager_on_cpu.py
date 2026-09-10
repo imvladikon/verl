@@ -20,7 +20,9 @@ save_checkpoint / load_checkpoint dispatch, and edge cases.
 Uses real megatron.core with gloo backend on a single CPU process.
 """
 
+import json
 import os
+import pathlib
 import shutil
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -109,6 +111,8 @@ def _make_manager(
     bridge="auto",
     peft_cls=None,
     use_distributed_optimizer=False,
+    provider=None,
+    hf_config=None,
 ):
     if save_contents is None:
         save_contents = ["model", "optimizer", "extra"]
@@ -140,7 +144,7 @@ def _make_manager(
         role="actor",
         model=model,
         arch="GPTForCausalLM",
-        hf_config=MagicMock(),
+        hf_config=MagicMock() if hf_config is None else hf_config,
         param_dtype=torch.float16,
         share_embeddings_and_output_weights=False,
         processing_class=MagicMock(),
@@ -149,6 +153,7 @@ def _make_manager(
         use_distributed_optimizer=use_distributed_optimizer,
         use_dist_checkpointing=use_dist_checkpointing,
         bridge=bridge,
+        provider=provider,
         peft_cls=peft_cls,
     )
 
@@ -655,3 +660,70 @@ class TestModelShardedStateDictNotBuiltUnnecessarily:
 
         mgr.load_checkpoint(ckpt_path)
         mgr.model[0].sharded_state_dict.assert_called_once()
+
+
+# ===========================================================================
+# Tests: the exported HF config keeps the model's own context length
+# ===========================================================================
+
+
+class TestExportedHFConfigKeepsModelContextLength:
+    """The HF config we export must come from the reference model, not the run.
+
+    Megatron-Bridge's generic ``CONFIG_MAPPING`` pairs HF ``max_position_embeddings``
+    with Megatron ``seq_length``, so a config regenerated from the provider claims the
+    training sequence length as the model's context window, and serving engines then
+    cap ``max_model_len`` at it. Measured on the pinned Bridge revision, all three GLM
+    bridges (GLM5 / GLM45 / GLM47Flash) do exactly that and
+    ``conform_config_to_reference`` does not restore the reference value.
+
+    verl avoids this by never asking the bridge to regenerate the config: it writes the
+    HF config it loaded from the model path and asks the bridge for weights only. These
+    tests pin that arrangement down so a future switch to a config-emitting bridge API
+    fails here instead of in a serving job.
+    """
+
+    def test_exported_config_keeps_reference_max_position_embeddings(self, tmp_path):
+        from transformers import LlamaConfig
+
+        from verl.utils.checkpoint.megatron_checkpoint_manager import get_hf_model_checkpoint_path
+
+        model_context_length = 1048576
+        training_seq_length = 8192
+        hf_config = LlamaConfig(
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            max_position_embeddings=model_context_length,
+        )
+        mgr = _make_manager(hf_config=hf_config)
+        # The Megatron side of the run is short-context; that must not leak into the export.
+        mgr.transformer_config.seq_length = training_seq_length
+
+        local_path = str(tmp_path / "step_1")
+        mgr._save_hf_config_and_tokenizer(local_path)
+
+        exported = json.loads(
+            (pathlib.Path(get_hf_model_checkpoint_path(local_path)) / "config.json").read_text(encoding="utf-8")
+        )
+        assert exported["max_position_embeddings"] == model_context_length
+
+    @pytest.mark.parametrize("vanilla", [True, False])
+    def test_bridge_export_asks_for_weights_only(self, tmp_path, vanilla):
+        """Neither bridge flavour may go through a config-emitting export API."""
+        mgr = _make_manager(provider=None if vanilla else MagicMock())
+        assert mgr.vanilla_bridge is vanilla
+
+        mgr._save_model_as_hf_via_bridge(str(tmp_path / "huggingface"))
+
+        if vanilla:
+            mgr.bridge.save_weights.assert_called_once()
+            mgr.bridge.save_hf_weights.assert_not_called()
+        else:
+            mgr.bridge.save_hf_weights.assert_called_once()
+            mgr.bridge.save_weights.assert_not_called()
+        # ``save_hf_pretrained`` regenerates config.json from the Megatron provider.
+        mgr.bridge.save_hf_pretrained.assert_not_called()
+        mgr.bridge.export_ckpt.assert_not_called()
