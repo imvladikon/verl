@@ -140,6 +140,24 @@ from the model directory. `TestExportedHFConfigKeepsModelContextLength` in
 `tests/utils/ckpt/test_megatron_checkpoint_manager_on_cpu.py` pins both halves of
 that arrangement.
 
+A second open Bridge fix,
+[#6036](https://github.com/NVIDIA-NeMo/Megatron-Bridge/pull/6036), sets
+`moe_router_bias_update_rate=0` for GLM-5 so the pretrained router correction bias
+stays fixed. The inconsistency it reports is real and measured on the pinned
+revision: driving `provider_bridge` with a minimal config gives GLM-4.5 a rate of
+`0` (it sets one explicitly, as does GLM-4.7-Flash) and GLM-5 the MCore default
+`1e-3`. Slime's `glm5_next` provider sets `1e-3` for GLM-5.3-Flash too.
+
+We do not port it. The harm the PR argues — a base-model buffer mutated outside
+LoRA state, which a fresh adapter cannot restore — is exactly what VERL already
+prevents in the adapter path with `freeze_peft_router_expert_bias`, and
+`tests/utils/test_megatron_peft_trainable_invariant.py` proves against real MCore
+that the buffer value is unchanged after the native update runs, with the bias
+still active in routing and the config untouched. That is a stronger guarantee
+than a provider default. What is left is full-parameter training, where the bias
+is part of the saved model and MCore's aux-loss-free balancing is the documented
+behaviour; changing it there needs its own evidence, which #6036 does not offer.
+
 Baseten's
 [native GLM-5.2 FP8 expert import](https://github.com/basetenlabs/Megatron-Bridge/commit/e6ab3619a95f)
 keeps E4M3 payloads and FP32 inverse scales without dequantizing routed
