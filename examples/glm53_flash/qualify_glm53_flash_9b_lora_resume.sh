@@ -121,8 +121,11 @@ train "${root}/resumed" "${total}" "${total}" auto
 echo "== negative control: resume with the optimizer deliberately dropped"
 # A resume that restarts Adam must not look like a good one. Save the model
 # alone at step K, resume from it, and require the comparison to fail.
-train "${root}/no_optimizer" "${half}" "${half}" disable '["model"]' '["model"]'
-train "${root}/no_optimizer" "${total}" "${total}" auto '["model"]' '["model"]'
+# Model and extra, never the optimizer: the RNG and the data cursor come back,
+# so the only thing this run restarts is Adam. Dropping extra as well would make
+# the control differ for two reasons at once and prove nothing about either.
+train "${root}/no_optimizer" "${half}" "${half}" disable '["model","extra"]' '["model","extra"]'
+train "${root}/no_optimizer" "${total}" "${total}" auto '["model","extra"]' '["model","extra"]'
 
 echo "== comparing adapters"
 python3 - "${root}/reference" "${root}/resumed" "${root}/no_optimizer" "${total}" <<'COMPARE'
@@ -220,15 +223,17 @@ if worst > tolerance:
 _, control_state = adapter(control, total)
 control_result, control_problem = compare(reference_state, control_state)
 if control_problem:
-    print(f"negative control differs structurally: {control_problem}")
-else:
-    control_worst, control_key = control_result
-    print(f"negative control difference {control_worst:.3e} at {control_key}")
-    if control_worst <= tolerance:
-        raise SystemExit(
-            "a resume without optimizer state reproduced the reference too: "
-            "this comparison cannot qualify anything"
-        )
+    # A control with different keys or shapes is a broken control, not a
+    # sensitive one: it would "fail" for reasons that have nothing to do with
+    # the optimizer, and pass this check while proving nothing about it.
+    raise SystemExit(f"negative control is not comparable to the reference: {control_problem}")
+control_worst, control_key = control_result
+print(f"negative control difference {control_worst:.3e} at {control_key}")
+if control_worst <= tolerance:
+    raise SystemExit(
+        "a resume without optimizer state reproduced the reference too: "
+        "this comparison cannot qualify anything"
+    )
 
 print("resume qualification passed")
 COMPARE

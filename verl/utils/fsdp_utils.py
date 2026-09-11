@@ -687,6 +687,29 @@ def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinit
     return total_norm
 
 
+def _canonical_fsdp_name(name: str) -> str:
+    """One spelling for a parameter path, inside a summon and outside it.
+
+    ``named_modules()`` is read before ``summon_full_params`` and keeps the
+    ``_fsdp_wrapped_module.`` segments; ``named_parameters()`` is read inside it,
+    where FSDP has already stripped them. Comparing the two raw gives
+    ``_fsdp_wrapped_module.layer`` against ``layer.lora_A``, which never matches,
+    so a unit stops recognizing its own nested children and starts treating their
+    still-sharded parameters as its own. Measured on two ranks with an adapter at
+    both the root and a nested unit: the checkpoint's (2, 8) was compared against
+    a (16,) local shard.
+    """
+    return name.replace("_fsdp_wrapped_module.", "")
+
+
+def _owned_by_nested(param_name: str, nested_fsdp_names) -> bool:
+    """Whether this parameter belongs to a nested unit rather than to this one."""
+    canonical = _canonical_fsdp_name(param_name)
+    return any(
+        canonical.startswith(_canonical_fsdp_name(nested) + ".") for nested in nested_fsdp_names
+    )
+
+
 def _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names) -> bool:
     """Identify this unit's adapters without unsharding any parameters.
 
@@ -698,7 +721,7 @@ def _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names) -> bool:
     if "lora_" in clean_prefix:
         return True
     for name, param in submodule.named_parameters():
-        if any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names):
+        if _owned_by_nested(name, nested_fsdp_names):
             continue
         original_names = getattr(param, "_fqns", None) or (name,)
         if any("lora_" in original_name for original_name in original_names):
@@ -781,7 +804,7 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
                 direct_params = {
                     f"{clean_prefix}.{name.replace('_fsdp_wrapped_module.', '')}": param
                     for name, param in submodule.named_parameters()
-                    if not any(name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
+                    if not _owned_by_nested(name, nested_fsdp_names)
                 }
                 # ``named_parameters()`` is relative to this FSDP unit. A leaf
                 # unit around ``lora_A.default`` therefore exposes only
@@ -820,10 +843,7 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
             root_params = {
                 name.replace("_fsdp_wrapped_module.", ""): param
                 for name, param in fsdp_module.named_parameters()
-                if not any(
-                    name.replace("_fsdp_wrapped_module.", "").startswith(f"{nested}.")
-                    for nested in nested_fsdp_names
-                )
+                if not _owned_by_nested(name, nested_fsdp_names)
             }
             for key, param in get_peft_model_state_dict(peft_model, state_dict=root_params).items():
                 if key in missing:
@@ -912,7 +932,7 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
                 with FSDP.summon_full_params(submodule, recurse=False, writeback=consume.writes):
                     direct_params = {}
                     for param_name, param in submodule.named_parameters():
-                        if any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names):
+                        if _owned_by_nested(param_name, nested_fsdp_names):
                             continue
                         local = param_name.replace("_fsdp_wrapped_module.", "")
                         direct_params[f"{clean_prefix}.{local}" if clean_prefix else local] = param

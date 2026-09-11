@@ -135,6 +135,31 @@ def _lora_dimension(
     return list(dimensions[name])
 
 
+def _kda_geometry(text_config: Any) -> tuple[int, int]:
+    """Head count and head width of the linear-attention block.
+
+    Two config shapes are in circulation for the same model: the released
+    checkpoints nest the geometry under ``linear_attn_config``, while configs
+    written by surgery and conversion keep it flat as ``linear_num_heads`` /
+    ``linear_head_dim``. Reading only the nested one turns a flat config into
+    ``int(None)`` and a TypeError that names neither the field nor the model.
+    """
+    nested = _config_value(text_config, "linear_attn_config", None) or {}
+    heads = _config_value(nested, "num_heads", None)
+    if heads is None:
+        heads = _config_value(text_config, "linear_num_heads", None)
+    head_dim = _config_value(nested, "head_dim", None)
+    if head_dim is None:
+        head_dim = _config_value(text_config, "linear_head_dim", None)
+    missing = [name for name, value in (("num_heads", heads), ("head_dim", head_dim)) if value is None]
+    if missing:
+        raise ValueError(
+            "GLM-5.3-Flash LoRA planning needs the linear-attention geometry; "
+            f"neither linear_attn_config.{missing[0]} nor linear_{missing[0]} is set in the config"
+        )
+    return int(heads), int(head_dim)
+
+
 def build_glm5_next_lora_adapter_plan(
     hf_config: Any,
     target_modules: Any,
@@ -170,9 +195,7 @@ def build_glm5_next_lora_adapter_plan(
             f"decoder layer, got {len(layer_types)} for {num_layers} layers"
         )
 
-    linear_config = _config_value(text_config, "linear_attn_config", {})
-    kda_heads = int(_config_value(linear_config, "num_heads"))
-    kda_head_dim = int(_config_value(linear_config, "head_dim"))
+    kda_heads, kda_head_dim = _kda_geometry(text_config)
     attention_heads = int(_config_value(text_config, "num_attention_heads"))
     q_lora_rank = int(_config_value(text_config, "q_lora_rank"))
     kv_lora_rank = int(_config_value(text_config, "kv_lora_rank"))

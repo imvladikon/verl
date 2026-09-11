@@ -78,24 +78,39 @@ class Base(nn.Module):
 
 
 def lora_wrap_policy():
-    """verl's own LoRA policy: wrap the trainable leaves, not the LoRA module.
+    """Wrap whatever the layout tagged, so several ownership shapes are reachable.
 
-    Wrapping the whole ``lora.Linear`` would mix trainable adapter parameters
-    with the frozen base weight, which FSDP1 refuses outright when
+    verl's own policy wraps the trainable leaves; wrapping the whole
+    ``lora.Linear`` instead would mix trainable adapter parameters with the
+    frozen base weight, which FSDP1 refuses outright when
     ``use_orig_params=False``.
     """
 
     def lambda_policy_fn(module):
-        return bool(
-            len(list(module.named_children())) == 0
-            and getattr(module, "weight", None) is not None
-            and module.weight.requires_grad
-        )
+        return bool(getattr(module, "_wrap_for_test", False))
 
     return functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
 
 
-def build(use_orig_params, strategy):
+def tag_layout(model, layout):
+    """Decide which modules become their own FSDP unit.
+
+    ``leaf`` is what verl's LoRA policy produces: both factors in their own unit.
+    ``root_only`` leaves the whole adapter in the root flat parameter.
+    ``root_and_child`` wraps one factor and leaves the other at root, so the
+    adapter lives at two levels at once -- the layout where an ownership check
+    that compares un-normalized names starts claiming a nested unit's shards.
+    """
+    for name, module in model.named_modules():
+        if layout == "leaf":
+            module._wrap_for_test = name.endswith("lora_A.default") or name.endswith("lora_B.default")
+        elif layout == "root_and_child":
+            module._wrap_for_test = name.endswith("lora_A.default")
+        else:
+            module._wrap_for_test = False
+
+
+def build(use_orig_params, strategy, layout):
     from peft import LoraConfig, get_peft_model
 
     model = get_peft_model(
@@ -105,6 +120,7 @@ def build(use_orig_params, strategy):
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.fill_(0.25 if "lora_A" in name else 0.5)
+    tag_layout(model, layout)
     device = None
     if torch.cuda.is_available():
         model = model.cuda()
@@ -189,10 +205,22 @@ def main():
         (ShardingStrategy.NO_SHARD, "NO_SHARD"),
     ):
         for use_orig_params in (True, False):
-            label = f"{strategy_name}/use_orig_params={use_orig_params}"
-            run_case(fsdp_utils, build(use_orig_params, strategy), label, failures)
-            if dist.get_rank() == 0 and not failures:
-                print(f"  {label}: export, load and all three rejections held")
+            for layout in ("leaf", "root_only", "root_and_child"):
+                label = f"{strategy_name}/orig={use_orig_params}/{layout}"
+                try:
+                    wrapped = build(use_orig_params, strategy, layout)
+                except ValueError as error:
+                    # FSDP1 refuses a flat parameter that mixes frozen and trainable
+                    # tensors when use_orig_params=False, so those layouts cannot
+                    # exist at all. Not reaching them is the correct outcome.
+                    if "uniform `requires_grad`" in str(error):
+                        if dist.get_rank() == 0:
+                            print(f"  {label}: unreachable layout, FSDP refuses it")
+                        continue
+                    raise
+                run_case(fsdp_utils, wrapped, label, failures)
+                if dist.get_rank() == 0 and not failures:
+                    print(f"  {label}: export, load and all three rejections held")
 
     dist.barrier()
     if dist.get_rank() == 0:
