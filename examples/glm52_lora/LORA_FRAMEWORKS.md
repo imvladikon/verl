@@ -167,9 +167,10 @@ track, not a reason to change the first BF16 trainer run.
 
 ### What the LoRA actually covers on Flash
 
-Counted on the 9B surgery checkpoint with the pinned Transformers 5.16.1 and
-PEFT 0.20, rank 16 (`examples/glm53_flash/lora_target_census.py`), through the
-route the trainer takes rather than the `all-linear` shorthand:
+Counted on the 24-layer surgery checkpoint (config sha256 `76f89e74...`, 18 KDA
+and 6 DSA layers, 128 routed and 1 shared expert) with the pinned Transformers
+5.16.1 and PEFT 0.20, rank 16 (`examples/glm53_flash/lora_target_census.py`),
+through the route the trainer takes rather than the `all-linear` shorthand:
 
 | group | linear modules | adapter tensors | adapter parameters |
 |---|---:|---:|---:|
@@ -178,22 +179,30 @@ route the trainer takes rather than the `all-linear` shorthand:
 | dense MLP | 3 | 6 | 294,912 |
 | routed experts | 0 | 0 | 0 |
 
-The routed experts are 46 packed `nn.Parameter` tensors, not modules, so PEFT
-never sees them: no route leaves them anything but frozen. The
-`gate_proj`/`up_proj`/`down_proj` names a target plan lists do exist, but they
-belong to the shared experts. Read a plan as expert coverage only after a census
-like this one, on the model being trained.
+The routed experts are 46 packed `nn.Parameter` tensors rather than modules, so
+the module route never reaches them, and the `gate_proj`/`up_proj`/`down_proj`
+names a target plan lists belong to the shared experts. Read a plan as expert
+coverage only after a census like this one, on the model being trained.
 
-The shorthand is not the same measurement: raw `all-linear` gives 572 tensors
-and 11,106,688 parameters, 44 tensors more, because `HFModelConfig` resolves the
-shorthand through `build_glm5_next_lora_adapter_plan` and that plan keeps the
-DSA indexer and the embedding/head extras opt-in. `--generic` reports the
-shorthand for comparison.
+Three numbers, three different questions:
 
-Adding routed-expert adapters is a different proposition, not a larger version
-of this one: independent gate/up/down at rank 16 across the full Flash comes to
-roughly 3.57B adapter parameters, which changes the memory, optimizer and
-weight-sync profile rather than extending it.
+| route | tensors | parameters |
+|---|---:|---:|
+| trainer plan | 528 | 10,719,744 |
+| raw `all-linear` (`--generic`) | 572 | 11,106,688 |
+| plan + `--target-parameters down_proj gate_up_proj` | 620 | 227,774,976 |
+
+The 44-tensor gap between the first two is the DSA indexer and the
+embedding/head extras that `build_glm5_next_lora_adapter_plan` keeps opt-in. The
+third is the answer to "can the routed experts be adapted at all": PEFT reaches
+packed parameters through `target_parameters`, and doing so is twenty times the
+adapter, which changes the memory, optimizer and weight-sync profile rather than
+extending it. Vision `patch_embed` is out of reach either way -- PEFT wraps 2D
+and 3D parameters, and that one is 5D.
+
+Counts belong to a configuration, not to a model name. The census writes the
+resolved config hash, the geometry and the dependency versions next to the plan
+fingerprint, so a number can be bound to the model it was measured on.
 
 ### NeMo RL
 
