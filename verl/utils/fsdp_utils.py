@@ -706,6 +706,30 @@ def _fsdp_unit_has_lora(clean_prefix, submodule, nested_fsdp_names) -> bool:
     return False
 
 
+def _canonical_adapter_names(fsdp_module, peft_model) -> set:
+    """Names of this model's adapter parameters, in checkpoint form, without summoning.
+
+    ``named_parameters()`` outside a summon is not a usable source here: with
+    ``use_orig_params=False`` FSDP1 replaces the originals with a FlatParameter,
+    and the resulting ``...lora_A._flat_param`` still contains ``lora_``, so the
+    PEFT filter accepts it and hands back a name no checkpoint ever carries.
+    Used as the expected set it rejects a correct adapter; used as the export
+    completeness check it pulls the raw flat parameter into the adapter.
+
+    A FlatParameter knows the parameters it flattened: ``_fqns`` holds their
+    names relative to the wrapped module. Expanding through it yields the same
+    canonical names the summoned passes produce, in both ``use_orig_params``
+    modes and with no all-gather.
+    """
+    resolved = OrderedDict()
+    for name, param in fsdp_module.named_parameters():
+        owner = name.rsplit(".", 1)[0] if "." in name else ""
+        for fqn in getattr(param, "_fqns", None) or (name.rsplit(".", 1)[-1] if owner else name,):
+            full = f"{owner}.{fqn}" if owner else fqn
+            resolved[full.replace("_fsdp_wrapped_module.", "")] = param
+    return set(get_peft_model_state_dict(peft_model, state_dict=resolved))
+
+
 def layered_summon_lora_params(fsdp_module) -> OrderedDict:
     """Collect LoRA params one FSDP unit at a time to keep peak GPU memory low.
 
@@ -784,7 +808,7 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
     # wrap policies part of the adapter lives at root, and a partial export is
     # not empty, so an "exported nothing" guard does not catch it. recurse=False
     # keeps this bounded to root's own flat parameter.
-    expected = set(_get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters()))
+    expected = _canonical_adapter_names(fsdp_module, peft_model)
     missing = expected - set(lora_params)
     if missing:
         nested_fsdp_names = {n for n, m in fsdp_module.named_modules() if n != "" and fsdp_version(m) > 0}
@@ -846,7 +870,7 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
     # only "incoming keys we did not consume" accepts a checkpoint that is
     # missing half the adapter and leaves those factors at their init values —
     # a silently wrong model rather than a failed load.
-    expected = set(_get_peft_state_from_named_parameters(peft_model, peft_model.named_parameters()))
+    expected = _canonical_adapter_names(fsdp_module, peft_model)
     incoming = set(lora_params)
     problems = []
     if expected - incoming:
@@ -865,10 +889,16 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
         return
 
     def _visit(consume):
-        """Walk the adapter FSDP units once, handing each unit's params to `consume`."""
+        """Walk the adapter FSDP units once, handing each unit's params to `consume`.
+
+        Root is visited like any other unit, but only when its own flat parameter
+        actually carries adapter tensors. The export side already writes those, so
+        skipping them here made a checkpoint that saves fine and refuses to load.
+        ``recurse=False`` keeps the root summon bounded to its own parameters.
+        """
         seen = set()
         for name, submodule in fsdp_module.named_modules():
-            if name == "" or fsdp_version(submodule) == 0:
+            if fsdp_version(submodule) == 0:
                 continue
             clean_prefix = name.replace("_fsdp_wrapped_module.", "")
             nested_fsdp_names = {n for n, m in submodule.named_modules() if n != "" and fsdp_version(m) > 0}
@@ -880,11 +910,12 @@ def layered_load_lora_params(fsdp_module, lora_params: dict[str, torch.Tensor]) 
             try:
                 # writeback only in the copy pass; the check pass must not write.
                 with FSDP.summon_full_params(submodule, recurse=False, writeback=consume.writes):
-                    direct_params = {
-                        f"{clean_prefix}.{param_name.replace('_fsdp_wrapped_module.', '')}": param
-                        for param_name, param in submodule.named_parameters()
-                        if not any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names)
-                    }
+                    direct_params = {}
+                    for param_name, param in submodule.named_parameters():
+                        if any(param_name.startswith(f"{nested_name}.") for nested_name in nested_fsdp_names):
+                            continue
+                        local = param_name.replace("_fsdp_wrapped_module.", "")
+                        direct_params[f"{clean_prefix}.{local}" if clean_prefix else local] = param
                     current_params = _get_peft_state_from_named_parameters(peft_model, direct_params.items())
                     seen.update(consume(current_params))
             finally:
