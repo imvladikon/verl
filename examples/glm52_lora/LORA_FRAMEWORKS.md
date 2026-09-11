@@ -165,6 +165,30 @@ experts. Its checks require complete 128x128 blocks and rowwise-only
 Transformer Engine storage. This is relevant to a future native-FP8/QLoRA
 track, not a reason to change the first BF16 trainer run.
 
+### What `all-linear` covers on Flash
+
+Counted on the 9B surgery checkpoint with the pinned Transformers 5.16.1 and
+PEFT 0.20, rank 16 (`examples/glm53_flash/lora_target_census.py`):
+
+| group | linear modules | adapter tensors | adapter parameters |
+|---|---:|---:|---:|
+| attention | 210 | 420 | 8,545,152 |
+| shared experts | 69 | 138 | 2,260,992 |
+| dense MLP | 3 | 6 | 294,912 |
+| other | 5 | 8 | 5,632 |
+| routed experts | 0 | 0 | 0 |
+
+The routed experts are 46 packed `nn.Parameter` tensors, not modules, so PEFT
+never sees them: `all-linear` leaves every routed expert frozen. The
+`gate_proj`/`up_proj`/`down_proj` names a target plan lists do exist, but they
+belong to the shared experts. Read a plan as expert coverage only after a census
+like this one, on the model being trained.
+
+Adding routed-expert adapters is a different proposition, not a larger version
+of this one: independent gate/up/down at rank 16 across the full Flash comes to
+roughly 3.57B adapter parameters, which changes the memory, optimizer and
+weight-sync profile rather than extending it.
+
 ### NeMo RL
 
 [NeMo RL LoRA](https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/lora.md)
