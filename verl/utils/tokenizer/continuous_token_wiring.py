@@ -27,6 +27,8 @@ from .continuous_token import (
     Gemma4ContinuousTokenBuilder,
     Gemma4VLContinuousTokenBuilder,
     GLM46VContinuousTokenBuilder,
+    GLM53FlashContinuousTokenBuilder,
+    GLM53FlashVLContinuousTokenBuilder,
     GLMContinuousTokenBuilder,
     GptOssContinuousTokenBuilder,
     KimiVLContinuousTokenBuilder,
@@ -59,6 +61,7 @@ class ContinuousTokenModelFamily(str, Enum):
     MINIMAX_M27 = "minimaxm27"
     GLM47 = "glm47"
     GLM5 = "glm5"
+    GLM53_FLASH = "glm53flash"
     GEMMA4 = "gemma4"
     GPTOSS = "gptoss"
     DEEPSEEK = "deepseek"
@@ -71,6 +74,7 @@ class ContinuousTokenModelFamily(str, Enum):
     GEMMA4_VL = "gemma4vl"
     KIMI_VL = "kimivl"
     GLM4V = "glm4v"
+    GLM53_FLASH_VL = "glm53flashvl"
     DEEPSEEK_VL2 = "deepseekvl2"
     DEEPSEEKV4 = "deepseekv4"
 
@@ -87,6 +91,7 @@ _CONTINUOUS_TOKEN_BUILDER_REGISTRY: dict[ContinuousTokenModelFamily, type[Any]] 
     ContinuousTokenModelFamily.MINIMAX_M27: MiniMaxContinuousTokenBuilder,
     ContinuousTokenModelFamily.GLM47: GLMContinuousTokenBuilder,
     ContinuousTokenModelFamily.GLM5: GLMContinuousTokenBuilder,
+    ContinuousTokenModelFamily.GLM53_FLASH: GLM53FlashContinuousTokenBuilder,
     ContinuousTokenModelFamily.GEMMA4: Gemma4ContinuousTokenBuilder,
     ContinuousTokenModelFamily.GPTOSS: GptOssContinuousTokenBuilder,
     ContinuousTokenModelFamily.DEEPSEEK: DeepSeekContinuousTokenBuilder,
@@ -99,6 +104,7 @@ _CONTINUOUS_TOKEN_BUILDER_REGISTRY: dict[ContinuousTokenModelFamily, type[Any]] 
     ContinuousTokenModelFamily.GEMMA4_VL: Gemma4VLContinuousTokenBuilder,
     ContinuousTokenModelFamily.KIMI_VL: KimiVLContinuousTokenBuilder,
     ContinuousTokenModelFamily.GLM4V: GLM46VContinuousTokenBuilder,
+    ContinuousTokenModelFamily.GLM53_FLASH_VL: GLM53FlashVLContinuousTokenBuilder,
     ContinuousTokenModelFamily.DEEPSEEK_VL2: DeepSeekVL2ContinuousTokenBuilder,
     ContinuousTokenModelFamily.DEEPSEEKV4: DeepSeekV4ContinuousTokenBuilder,
 }
@@ -124,6 +130,8 @@ _MODEL_TYPE_TO_FAMILY: dict[str, ContinuousTokenModelFamily] = {
     "minimax_m2": ContinuousTokenModelFamily.MINIMAX_M2,
     "glm4_moe": ContinuousTokenModelFamily.GLM47,
     "glm_moe_dsa": ContinuousTokenModelFamily.GLM5,
+    # GLM-5.3-Flash is the distinct hybrid KDA/DSA ``glm5_next`` family.
+    "glm5_next": ContinuousTokenModelFamily.GLM53_FLASH,
     "gemma4": ContinuousTokenModelFamily.GEMMA4,
     "gpt_oss": ContinuousTokenModelFamily.GPTOSS,
     "deepseek_v2": ContinuousTokenModelFamily.DEEPSEEK,
@@ -147,6 +155,7 @@ _TEXT_TO_VL_FAMILY: dict[ContinuousTokenModelFamily, ContinuousTokenModelFamily]
     ContinuousTokenModelFamily.DEFAULT: ContinuousTokenModelFamily.VL_DEFAULT,
     ContinuousTokenModelFamily.GEMMA4: ContinuousTokenModelFamily.GEMMA4_VL,
     ContinuousTokenModelFamily.QWEN35: ContinuousTokenModelFamily.QWEN3_VL,
+    ContinuousTokenModelFamily.GLM53_FLASH: ContinuousTokenModelFamily.GLM53_FLASH_VL,
 }
 
 

@@ -88,7 +88,7 @@ def get_sharding_strategy(device_mesh, zero3_enable=True):
 
 
 def unfuse_moe_params(weights, model_type: str | None = None):
-    """Expand Transformers 5 packed MoE expert tensors to vLLM checkpoint keys.
+    """Stream Transformers runtime tensors back to rollout checkpoint keys.
 
     Transformers 5 stores Qwen-style MoE experts as packed 3D parameters:
     ``mlp.experts.gate_up_proj`` with shape
@@ -97,8 +97,36 @@ def unfuse_moe_params(weights, model_type: str | None = None):
     ``[num_experts, hidden_size, intermediate_size]``. vLLM's Qwen MoE reload
     path still accepts the original per-expert checkpoint keys during live
     weight sync, so stream those keys without materializing a full dict.
+
+    GLM-5.3 also uses the Transformers 5 global conversion registry for mHC,
+    KDA forget-gate, and fused depthwise-convolution tensors. The legacy
+    ``_checkpoint_conversion_mapping`` attribute is absent, so reverse those
+    conversions here, after each FSDP tensor is materialized. Keeping this
+    conversion streaming is required for the full-size checkpoint.
     """
     for name, tensor in weights:
+        if model_type in {"glm5_next", "glm5_next_text"}:
+            if name.endswith(".self_attn.conv1d.weight"):
+                if tensor.ndim < 1 or tensor.shape[0] % 3 != 0:
+                    raise ValueError(f"Invalid GLM-5.3 fused conv1d shape for {name}: {tuple(tensor.shape)}")
+                q_conv, k_conv, v_conv = tensor.chunk(3, dim=0)
+                base = name.removesuffix(".conv1d.weight")
+                yield f"{base}.q_conv1d.weight", q_conv.contiguous()
+                yield f"{base}.k_conv1d.weight", k_conv.contiguous()
+                yield f"{base}.v_conv1d.weight", v_conv.contiguous()
+                continue
+
+            name = name.replace(".self_attn.forget_gate.", ".self_attn.")
+            for runtime_name, checkpoint_name in (
+                (".attn_hc.fn", ".hc_attn_fn"),
+                (".attn_hc.base", ".hc_attn_base"),
+                (".attn_hc.scale", ".hc_attn_scale"),
+                (".ffn_hc.fn", ".hc_ffn_fn"),
+                (".ffn_hc.base", ".hc_ffn_base"),
+                (".ffn_hc.scale", ".hc_ffn_scale"),
+            ):
+                name = name.replace(runtime_name, checkpoint_name)
+
         # GPT-OSS checkpoint weights use packed 3D expert tensors directly.
         # Splitting them into per-expert 2D tensors makes vLLM's GPT-OSS loader
         # index a 2D tensor as 3D during TP slicing.

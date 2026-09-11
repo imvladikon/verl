@@ -27,7 +27,36 @@ from typing import Any
 
 from verl.trainer.config import CheckpointConfig
 
-__all__ = ["McoreCheckpointConfig"]
+__all__ = ["AutomodelCheckpointConfig", "McoreCheckpointConfig"]
+
+
+@dataclass
+class AutomodelCheckpointConfig(CheckpointConfig):
+    """Checkpoint options specific to the AutoModel backend.
+
+    ``save_consolidated`` defaults to the historical VERL behavior. Large
+    distributed restart checkpoints can disable it explicitly, while small
+    lifecycle tests can retain an HF export for downstream rollout stages.
+    ``strict_rng_state`` lets new deterministic-resume qualifications fail
+    closed without making pre-existing checkpoints unloadable by default.
+    """
+
+    save_consolidated: bool = True
+    strict_rng_state: bool = False
+
+    def __post_init__(self) -> None:
+        allowed = {"model", "hf_model", "optimizer", "extra"}
+        for attribute in ("save_contents", "load_contents"):
+            contents = getattr(self, attribute)
+            if not contents:
+                raise ValueError(f"AutoModel checkpoint {attribute} must not be empty")
+            unknown = set(contents) - allowed
+            if unknown:
+                raise ValueError(
+                    f"Unknown AutoModel checkpoint {attribute}: {sorted(unknown)}; allowed values are {sorted(allowed)}"
+                )
+        if "hf_model" in self.save_contents and not self.save_consolidated:
+            raise ValueError("AutoModel save_contents includes 'hf_model', but save_consolidated is false")
 
 
 @dataclass

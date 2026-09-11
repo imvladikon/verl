@@ -70,29 +70,62 @@ def get_sglang_fp8_ignored_layers(quant_config: Any = None) -> list[str]:
     return _dedupe_layers(ignored_layers)
 
 
+def is_sglang_fp8_quant_config(quant_config: Any) -> bool:
+    """Return whether a checkpoint already declares an FP8 rollout layout."""
+    quant_method = _get_config_value(quant_config, "quant_method")
+    return isinstance(quant_method, str) and quant_method.lower() == "fp8"
+
+
+def _path_aliases(path: str) -> set[str]:
+    """Return equivalent HF/SGLang module paths for an ignore rule."""
+    path = path.lower().strip(".")
+    aliases = {path}
+    if path.startswith("model.language_model."):
+        aliases.add("model." + path.removeprefix("model.language_model."))
+    elif path.startswith("language_model."):
+        aliases.add("model." + path.removeprefix("language_model."))
+    return aliases
+
+
+def _module_path_candidates(param_name: str) -> set[str]:
+    name = param_name.strip(".")
+    module_name = name[: -len(".weight")] if name.lower().endswith(".weight") else name
+    return _path_aliases(name) | _path_aliases(module_name)
+
+
+def _dot_path_substrings(path: str):
+    """Yield every contiguous, dot-boundary-aligned subpath."""
+    parts = path.split(".")
+    for start in range(len(parts)):
+        candidate = parts[start]
+        yield candidate
+        for end in range(start + 1, len(parts)):
+            candidate = f"{candidate}.{parts[end]}"
+            yield candidate
+
+
 def _matches_ignored_layer(param_name: str, ignored_layer: str) -> bool:
     ignored_layer = ignored_layer.strip()
     if not ignored_layer:
         return False
 
-    name = param_name.strip(".")
-    module_name = name[: -len(".weight")] if name.lower().endswith(".weight") else name
+    candidates = _module_path_candidates(param_name)
     if ignored_layer.startswith("re:"):
         pattern = ignored_layer[3:]
-        return any(re.match(pattern, candidate) for candidate in (name, module_name))
+        return any(re.match(pattern, candidate) for candidate in candidates)
 
     ignored_layer = ignored_layer.lower().strip(".")
-    name = name.lower()
-    module_name = module_name.lower()
-    for candidate in (name, module_name):
-        if candidate == ignored_layer:
-            return True
-        if candidate.startswith(f"{ignored_layer}."):
-            return True
-        if candidate.endswith(f".{ignored_layer}"):
-            return True
-        if f".{ignored_layer}." in f".{candidate}.":
-            return True
+    ignored_aliases = _path_aliases(ignored_layer)
+    for candidate in candidates:
+        for ignored_candidate in ignored_aliases:
+            if candidate == ignored_candidate:
+                return True
+            if candidate.startswith(f"{ignored_candidate}."):
+                return True
+            if candidate.endswith(f".{ignored_candidate}"):
+                return True
+            if f".{ignored_candidate}." in f".{candidate}.":
+                return True
     return False
 
 
@@ -116,12 +149,45 @@ def build_sglang_fp8_quant_config(hf_config: Any = None, ignored_layers: Any = N
 
 
 class SGLangFP8QuantizerHelper(FP8QuantizerHelper):
+    # These GLM MLA/DSA weights are block-FP8 in the released checkpoints but
+    # do not match the generic q_proj/k_proj/v_proj/o_proj whitelist.  Match
+    # complete suffixes so similarly named norms, biases, and indexer output
+    # projections remain in their checkpoint dtype.
+    _GLM_FP8_WEIGHT_SUFFIXES = (
+        ".self_attn.q_a_proj.weight",
+        ".self_attn.q_b_proj.weight",
+        ".self_attn.kv_a_proj_with_mqa.weight",
+        ".self_attn.kv_b_proj.weight",
+        ".self_attn.indexer.wk.weight",
+        ".self_attn.indexer.wq_b.weight",
+    )
+
     def __init__(self, quant_config):
         super().__init__(quant_config)
+        # Sending the original BF16 tensor after a failed conversion only moves
+        # the failure to SGLang's dtype guard and can partially update a model.
+        self.raise_on_quantization_error = True
         self.ignored_layers = get_sglang_fp8_ignored_layers(quant_config)
+        self._ignored_exact = set()
+        self._ignored_regex = []
+        for ignored_layer in self.ignored_layers:
+            if ignored_layer.startswith("re:"):
+                self._ignored_regex.append(re.compile(ignored_layer[3:]))
+            else:
+                self._ignored_exact.update(_path_aliases(ignored_layer))
+
+    def _is_ignored_param(self, param_name: str) -> bool:
+        candidates = _module_path_candidates(param_name)
+        if any(pattern.match(candidate) for pattern in self._ignored_regex for candidate in candidates):
+            return True
+        return any(
+            subpath in self._ignored_exact for candidate in candidates for subpath in _dot_path_substrings(candidate)
+        )
 
     def should_quantize_param(self, param_name):
-        for ignored_layer in self.ignored_layers:
-            if _matches_ignored_layer(param_name, ignored_layer):
-                return False
+        if self._is_ignored_param(param_name):
+            return False
+        param_lower = param_name.lower()
+        if param_lower.endswith(self._GLM_FP8_WEIGHT_SUFFIXES):
+            return True
         return super().should_quantize_param(param_name)

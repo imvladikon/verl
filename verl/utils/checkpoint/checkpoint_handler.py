@@ -65,6 +65,7 @@ class CheckpointHandler:
         resume_from_path=None,
         mode=OrchestrationMode.SPMD,
         lora_train_meta=None,
+        checkpoint_config=None,
     ):
         self.default_local_dir = default_local_dir
         self.max_ckpt_to_keep = max_ckpt_to_keep
@@ -75,6 +76,7 @@ class CheckpointHandler:
         self.train_dataloader = train_dataloader
         self.mode = mode
         self.lora_train_meta = lora_train_meta
+        self.checkpoint_config = checkpoint_config
 
         if self.mode == OrchestrationMode.SPMD:
             self.rank = torch.distributed.get_rank()
@@ -86,6 +88,18 @@ class CheckpointHandler:
             self.dp_rank = 0
         else:
             raise ValueError(f"Unknown {self.mode=}")
+
+    def _content_enabled(self, content: str, phase: str) -> bool:
+        checkpoint_config = getattr(self, "checkpoint_config", None)
+        if checkpoint_config is None:
+            checkpoint_config = getattr(self.engine, "checkpoint_config", None)
+        if checkpoint_config is None:
+            return True
+        attribute = f"{phase}_contents"
+        contents = getattr(checkpoint_config, attribute, None)
+        if contents is None and hasattr(checkpoint_config, "get"):
+            contents = checkpoint_config.get(attribute, None)
+        return contents is None or content in contents
 
     def save_checkpoint(self, step):
         """Save checkpoint using FSDPCheckpointManager with improved tracking"""
@@ -113,7 +127,7 @@ class CheckpointHandler:
                 json.dump(self.lora_train_meta, f, ensure_ascii=False, indent=4)
             print(f"Saved LoRA rank/alpha metadata to: {lora_meta_path}")
 
-        if self.is_mp_src_rank_with_outputs:
+        if self._content_enabled("extra", "save") and self.is_mp_src_rank_with_outputs:
             dp_rank = self.dp_rank
             local_mkdir_safe(local_global_step_folder)
             dataloader_local_path = os.path.join(local_global_step_folder, f"data_{dp_rank}.pt")
@@ -147,6 +161,13 @@ class CheckpointHandler:
         if checkpoint_path is None:
             return 0
 
+        log_with_rank(
+            f"Loading checkpoint from: {checkpoint_path}",
+            logger=logger,
+            rank=self.rank,
+            log_only_rank_0=True,
+        )
+
         # extract resume step from checkpoint path
         resume_step = extract_step(checkpoint_path)
         if resume_step is None:
@@ -162,8 +183,8 @@ class CheckpointHandler:
 
         # Use checkpoint manager to load model state
         self.engine.load_checkpoint(checkpoint_path)
-        # Always load dataloader state for StatefulDataLoader
-        self._load_dataloader_state(checkpoint_path)
+        if self._content_enabled("extra", "load"):
+            self._load_dataloader_state(checkpoint_path)
 
         return resume_step
 
@@ -173,6 +194,23 @@ class CheckpointHandler:
         dataloader_path = os.path.join(checkpoint_path, f"data_{dp_rank}.pt")
 
         if os.path.exists(dataloader_path):
+            try:
+                steps_per_epoch = len(self.train_dataloader)
+            except (TypeError, NotImplementedError):
+                steps_per_epoch = 0
+
+            resume_global_step = getattr(self, "resume_global_step", 0)
+            at_epoch_boundary = steps_per_epoch > 0 and resume_global_step % steps_per_epoch == 0
+            if at_epoch_boundary:
+                log_with_rank(
+                    f"Skipping dataloader state restore because global step {resume_global_step} is at an epoch "
+                    f"boundary ({steps_per_epoch=}); the saved iterator is exhausted",
+                    logger=logger,
+                    rank=self.rank,
+                    log_only_rank_0=True,
+                )
+                return
+
             # Use StatefulDataLoader's built-in state dict functionality
             dataloader_state_dict = torch.load(dataloader_path, map_location="cpu", weights_only=False)
             self.train_dataloader.load_state_dict(dataloader_state_dict)

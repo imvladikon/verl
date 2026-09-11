@@ -30,7 +30,13 @@ from transformers.dynamic_module_utils import custom_object_save
 
 from verl.utils.device import is_cuda_available
 from verl.utils.fs import copy_to_local, is_non_local, local_mkdir_safe
-from verl.utils.fsdp_utils import fsdp_version, get_fsdp_full_state_dict, get_fsdp_state_ctx
+from verl.utils.fsdp_utils import (
+    collect_lora_params,
+    fsdp_version,
+    get_fsdp_full_state_dict,
+    get_fsdp_state_ctx,
+    layered_load_lora_params,
+)
 from verl.utils.logger import log_with_rank
 from verl.utils.transformers_compat import drop_tied_target_keys, get_auto_model_for_vision2seq
 
@@ -39,6 +45,9 @@ from .checkpoint_manager import BaseCheckpointManager
 # Setup logging
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
+
+_LORA_CHECKPOINT_FORMAT_KEY = "__verl_lora_checkpoint_format__"
+_PEFT_ADAPTER_FORMAT = "peft_adapter_v1"
 
 
 @dataclass
@@ -213,13 +222,19 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 remote_model_path = os.path.join(local_path, f"model_world_size_{self.world_size}_rank_{self.rank}.pt")
                 local_model_path = copy_to_local(remote_model_path)
                 model_state_dict = torch.load(local_model_path, weights_only=False)
+                lora_checkpoint_format = model_state_dict.pop(_LORA_CHECKPOINT_FORMAT_KEY, None)
                 if self.is_lora_only_state_dict(model_state_dict):
-                    result = self.model.load_state_dict(model_state_dict, strict=False)
-                    if result is not None and result.unexpected_keys:
-                        raise ValueError(
-                            f"Failed to load LoRA-only checkpoint: unexpected keys {result.unexpected_keys}. "
-                            f"Ensure the model has the correct LoRA adapters configured."
-                        )
+                    if lora_checkpoint_format == _PEFT_ADAPTER_FORMAT:
+                        layered_load_lora_params(self.model, model_state_dict)
+                    elif lora_checkpoint_format is None:
+                        result = self.model.load_state_dict(model_state_dict, strict=False)
+                        if result is not None and result.unexpected_keys:
+                            raise ValueError(
+                                f"Failed to load LoRA-only checkpoint: unexpected keys {result.unexpected_keys}. "
+                                f"Ensure the model has the correct LoRA adapters configured."
+                            )
+                    else:
+                        raise ValueError(f"Unknown LoRA checkpoint format: {lora_checkpoint_format!r}")
                     log_with_rank(
                         f"Loaded LoRA-only checkpoint ({len(model_state_dict)} keys) from {remote_model_path}",
                         rank=self.rank,
@@ -318,17 +333,22 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 extra_path = os.path.join(local_path, f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt")
 
                 if self.should_save_model:
-                    model_state_dict = self.model.state_dict()
-                    if self.should_save_lora_only and self._has_lora():
-                        n_total = len(model_state_dict)
-                        model_state_dict = {
-                            k: v for k, v in model_state_dict.items() if "lora_" in k or ".adapter_" in k
-                        }
+                    save_peft_adapter = (
+                        self.should_save_lora_only and self._has_lora() and fsdp_version(self.model) == 1
+                    )
+                    if save_peft_adapter:
+                        model_state_dict = dict(
+                            collect_lora_params(
+                                self.model,
+                                layered_summon=True,
+                                base_sync_done=True,
+                                allow_full_summon_fallback=False,
+                            )
+                        )
                         if not model_state_dict:
                             raise ValueError(
-                                f"save_lora_only is True and the model has a peft_config, "
-                                f"but no LoRA/adapter parameters were found in the state dict. "
-                                f"Total params checked: {n_total}."
+                                "save_lora_only is True and the model has a peft_config, "
+                                "but no LoRA/adapter parameters were collected."
                             )
                         lora_bytes = 0
                         for v in model_state_dict.values():
@@ -339,11 +359,25 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                                     lora_bytes += shard.tensor.numel() * shard.tensor.element_size()
                         lora_mib = lora_bytes / 1024**2
                         log_with_rank(
-                            f"LoRA-only save: {len(model_state_dict)}/{n_total} params ({lora_mib:.1f} MiB)",
+                            f"LoRA-only save: {len(model_state_dict)} params ({lora_mib:.1f} MiB)",
                             rank=self.rank,
                             logger=logger,
                             log_only_rank_0=True,
                         )
+                        model_state_dict[_LORA_CHECKPOINT_FORMAT_KEY] = _PEFT_ADAPTER_FORMAT
+                    else:
+                        model_state_dict = self.model.state_dict()
+                        if self.should_save_lora_only and self._has_lora():
+                            n_total = len(model_state_dict)
+                            model_state_dict = {
+                                k: v for k, v in model_state_dict.items() if "lora_" in k or ".adapter_" in k
+                            }
+                            if not model_state_dict:
+                                raise ValueError(
+                                    f"save_lora_only is True and the model has a peft_config, "
+                                    f"but no LoRA/adapter parameters were found in the state dict. "
+                                    f"Total params checked: {n_total}."
+                                )
                     torch.save(model_state_dict, model_path)
                     log_with_rank(f"Saved model to {os.path.abspath(model_path)}", rank=self.rank, logger=logger)
 

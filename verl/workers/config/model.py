@@ -22,8 +22,20 @@ from verl.utils import hf_processor, hf_tokenizer
 from verl.utils.fs import copy_to_local
 from verl.utils.import_utils import import_external_libs
 from verl.utils.model import get_generation_config, update_model_config
+from verl.workers.config.lora_adapter_plan import build_glm5_next_lora_adapter_plan
 
-__all__ = ["HFModelConfig", "MtpConfig"]
+__all__ = ["HFModelConfig", "MtpConfig", "build_glm5_next_lora_adapter_plan"]
+
+
+def _disable_mtp_layers(hf_config: Any) -> None:
+    """Disable every released top-level or nested MTP count encoding."""
+    for config in (hf_config, getattr(hf_config, "text_config", None)):
+        if config is None:
+            continue
+        if hasattr(config, "num_nextn_predict_layers"):
+            config.num_nextn_predict_layers = 0
+        if hasattr(config, "mtp_num_hidden_layers"):
+            config.mtp_num_hidden_layers = 0
 
 
 @dataclass
@@ -83,6 +95,10 @@ class HFModelConfig(BaseConfig):
         "local_hf_config_path",
         "local_tokenizer_path",
         "mtp",
+        "freeze_vision_tower",
+        "lora_adapter_plan",
+        "target_modules",
+        "exclude_modules",
     }
 
     path: str = MISSING
@@ -117,6 +133,11 @@ class HFModelConfig(BaseConfig):
     enable_gradient_checkpointing: bool = True
     enable_activation_offload: bool = False
 
+    # Whether VLM training should freeze the visual encoder. ActorConfig's
+    # legacy top-level flag is copied here before the training engine is built;
+    # SFT can set this field directly under ``model``.
+    freeze_vision_tower: bool = False
+
     use_remove_padding: bool = True
 
     # TODO: unify fsdp and megatron lora config
@@ -125,8 +146,9 @@ class HFModelConfig(BaseConfig):
     lora_alpha: int = 16
     target_modules: Optional[Any] = "all-linear"  # allow both "all-linear" and ["q_proj","k_proj"]
     target_parameters: Optional[list[str]] = None  # for lora adapter on nn.Parameter
+    lora_adapter_plan: Optional[dict[str, Any]] = None
 
-    exclude_modules: Optional[str] = None
+    exclude_modules: Optional[Any] = None  # allow a regex string or a list of module suffixes
 
     # megatron lora config
     lora: dict[str, Any] = field(default_factory=dict)
@@ -161,6 +183,19 @@ class HFModelConfig(BaseConfig):
                         raise TypeError(
                             "All elements in target_modules list must be strings, "
                             f"but found {type(target_module).__name__}"
+                        )
+        if self.exclude_modules is not None:
+            if not isinstance(self.exclude_modules, (str | list)):
+                raise TypeError(
+                    "exclude_modules must be a regex string or a list of strings, "
+                    f"but got {type(self.exclude_modules).__name__}"
+                )
+            if isinstance(self.exclude_modules, list):
+                for exclude_module in self.exclude_modules:
+                    if not isinstance(exclude_module, str):
+                        raise TypeError(
+                            "All elements in exclude_modules list must be strings, "
+                            f"but found {type(exclude_module).__name__}"
                         )
 
         import_external_libs(self.external_lib)
@@ -251,14 +286,29 @@ class HFModelConfig(BaseConfig):
         # When MTP is disabled, zero out MTP layer counts from hf_config so that
         # downstream engine/worker code does not need to handle each MTP field format
         # individually. Supports both DeepSeek-style (num_nextn_predict_layers) and
-        # Qwen3.5-style (mtp_num_hidden_layers, possibly nested under text_config).
+        # Qwen3.5-style (mtp_num_hidden_layers), at either the root or text config.
+        # GLM-5.3-Flash uses text_config.num_nextn_predict_layers.
         if not self.mtp.enable:
-            if hasattr(self.hf_config, "num_nextn_predict_layers"):
-                self.hf_config.num_nextn_predict_layers = 0
-            if hasattr(self.hf_config, "mtp_num_hidden_layers"):
-                self.hf_config.mtp_num_hidden_layers = 0
-            if hasattr(self.hf_config, "text_config") and hasattr(self.hf_config.text_config, "mtp_num_hidden_layers"):
-                self.hf_config.text_config.mtp_num_hidden_layers = 0
+            _disable_mtp_layers(self.hf_config)
+
+        lora_enabled = self.lora_rank > 0 or int(self.lora.get("rank", 0) or 0) > 0
+        if lora_enabled:
+            lora_rank = max(self.lora_rank, int(self.lora.get("rank", 0) or 0))
+            lora_alpha = (
+                int(self.lora.get("alpha", 0) or 0)
+                if int(self.lora.get("rank", 0) or 0) > 0
+                else self.lora_alpha
+            )
+            self.lora_adapter_plan = build_glm5_next_lora_adapter_plan(
+                self.hf_config,
+                self.target_modules,
+                rank=lora_rank,
+                alpha=lora_alpha,
+                exclude_modules=self.exclude_modules,
+            )
+            if self.lora_adapter_plan is not None:
+                self.target_modules = self.lora_adapter_plan["target_modules"]
+                self.exclude_modules = self.lora_adapter_plan["trainer_exclude_modules"]
 
     def get_processor(self):
         return self.processor if self.processor is not None else self.tokenizer

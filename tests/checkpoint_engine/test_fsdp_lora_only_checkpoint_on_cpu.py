@@ -14,7 +14,9 @@
 
 """Unit tests for save_lora_only checkpoint support in FSDPCheckpointManager."""
 
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
+from contextlib import nullcontext
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -150,6 +152,63 @@ class TestFSDPCheckpointManagerLoraOnly:
         for key in state_dict:
             assert "lora_" in key or ".adapter_" in key, "Unexpected base key: {}".format(key)
         assert len(state_dict) == 4
+
+    def test_fsdp1_save_lora_only_does_not_materialize_base_state_dict(self, tmp_path):
+        import torch
+
+        model = _FakeFSDPModel(has_lora=True)
+        model.state_dict = Mock(side_effect=AssertionError("base state_dict must not be called"))
+        mgr = self._make_fsdp_manager(
+            checkpoint_config={"save_lora_only": True, "save_contents": ["model"]},
+            model=model,
+        )
+        adapter_state = OrderedDict(
+            {
+                "base_model.model.proj.lora_A.weight": torch.ones(2, 3),
+                "base_model.model.proj.lora_B.weight": torch.zeros(3, 2),
+            }
+        )
+
+        with (
+            patch("verl.utils.checkpoint.fsdp_checkpoint_manager.fsdp_version", return_value=1),
+            patch("verl.utils.checkpoint.fsdp_checkpoint_manager.get_fsdp_state_ctx", return_value=nullcontext()),
+            patch(
+                "verl.utils.checkpoint.fsdp_checkpoint_manager.collect_lora_params",
+                return_value=adapter_state,
+            ),
+        ):
+            save_dir = tmp_path / "adapter_only"
+            mgr.save_checkpoint(local_path=str(save_dir), global_step=1)
+
+        model.state_dict.assert_not_called()
+        saved = torch.load(save_dir / "model_world_size_1_rank_0.pt", weights_only=False)
+        assert saved.pop("__verl_lora_checkpoint_format__") == "peft_adapter_v1"
+        assert list(saved) == list(adapter_state)
+
+    def test_fsdp1_loads_peft_adapter_with_layered_loader(self, tmp_path):
+        import torch
+
+        model = _FakeFSDPModel(has_lora=True)
+        model.load_state_dict = Mock(side_effect=AssertionError("full model loader must not be called"))
+        mgr = self._make_fsdp_manager(checkpoint_config={"load_contents": ["model"]}, model=model)
+        save_dir = tmp_path / "adapter_only"
+        save_dir.mkdir()
+        adapter_state = {
+            "base_model.model.proj.lora_A.weight": torch.ones(2, 3),
+            "__verl_lora_checkpoint_format__": "peft_adapter_v1",
+        }
+        torch.save(adapter_state, save_dir / "model_world_size_1_rank_0.pt")
+
+        with (
+            patch("verl.utils.checkpoint.fsdp_checkpoint_manager.fsdp_version", return_value=1),
+            patch("verl.utils.checkpoint.fsdp_checkpoint_manager.get_fsdp_state_ctx", return_value=nullcontext()),
+            patch("verl.utils.checkpoint.fsdp_checkpoint_manager.layered_load_lora_params") as layered_load,
+        ):
+            mgr.load_checkpoint(local_path=str(save_dir))
+
+        model.load_state_dict.assert_not_called()
+        layered_load.assert_called_once()
+        assert list(layered_load.call_args.args[1]) == ["base_model.model.proj.lora_A.weight"]
 
     def test_save_lora_only_no_lora_saves_full(self, tmp_path):
         model = _FakeFSDPModel(has_lora=False)
