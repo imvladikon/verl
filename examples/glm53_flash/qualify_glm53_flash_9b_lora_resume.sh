@@ -15,6 +15,18 @@
 # have to match: a resume that silently restarts the optimizer or reshuffles the
 # data produces a different adapter while reporting success.
 #
+# A fourth run is the negative control: the same split with only the model
+# saved, so Adam really is restarted. Without it the tolerance proves nothing,
+# because a comparison that cannot fail cannot qualify anything.
+#
+# The comparison reads the payload the trainer actually writes for an
+# adapter-only save -- model_world_size_*_rank_*.pt with its format marker --
+# at exactly the expected final step. adapter_model.safetensors belongs to the
+# hf_model branch, which gathers the full base model, the very peak an
+# adapter-only save exists to avoid. Empty, non-finite and mismatched payloads
+# are rejected rather than silently compared: with `delta > worst` alone, NaN
+# passes, because every comparison against NaN is false.
+#
 # Data settings are strict here on purpose. The smoke allows right truncation
 # and ignores input-id mismatches, which is fine for a two-step start-up check
 # and wrong for anything that claims the pipeline is correct.
@@ -45,8 +57,10 @@ export PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}"
 export TOKENIZERS_PARALLELISM=false
 mkdir -p "${root}"
 
-train() {   # <output dir> <total steps> <save freq> <resume mode>
+train() {   # <output dir> <total steps> <save freq> <resume mode> [save contents] [load contents]
   local out=$1 steps=$2 save_freq=$3 resume=$4
+  local save_contents=${5:-'["model","optimizer","extra"]'}
+  local load_contents=${6:-'["model","optimizer","extra"]'}
   mkdir -p "${out}"
   "${runner[@]}" -m verl.trainer.sft_trainer \
     data.train_files="${train_file}" \
@@ -78,8 +92,8 @@ train() {   # <output dir> <total steps> <save freq> <resume mode>
     optim.optimizer_impl=torch.optim \
     optim.optimizer=AdamW \
     optim.lr=0.0001 \
-    checkpoint.save_contents='["model","optimizer","extra"]' \
-    checkpoint.load_contents='["model","optimizer","extra"]' \
+    checkpoint.save_contents="${save_contents}" \
+    checkpoint.load_contents="${load_contents}" \
     +checkpoint.save_lora_only=true \
     trainer.total_epochs=1 \
     trainer.total_training_steps="${steps}" \
@@ -104,49 +118,117 @@ train "${root}/resumed" "${half}" "${half}" disable
 echo "== part two: new process, resuming to ${total}"
 train "${root}/resumed" "${total}" "${total}" auto
 
+echo "== negative control: resume with the optimizer deliberately dropped"
+# A resume that restarts Adam must not look like a good one. Save the model
+# alone at step K, resume from it, and require the comparison to fail.
+train "${root}/no_optimizer" "${half}" "${half}" disable '["model"]' '["model"]'
+train "${root}/no_optimizer" "${total}" "${total}" auto '["model"]' '["model"]'
+
 echo "== comparing adapters"
-python3 - "${root}/reference" "${root}/resumed" "${total}" <<'PY'
-import pathlib, sys
+python3 - "${root}/reference" "${root}/resumed" "${root}/no_optimizer" "${total}" <<'COMPARE'
+import pathlib
+import sys
+
 import torch
 
-reference, resumed, total = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+reference, resumed, control, total = (
+    pathlib.Path(sys.argv[1]),
+    pathlib.Path(sys.argv[2]),
+    pathlib.Path(sys.argv[3]),
+    int(sys.argv[4]),
+)
+
+# The trainer writes the adapter-only payload as a torch file per rank, with a
+# format marker inside. adapter_model.safetensors belongs to the hf_model save
+# branch, which gathers the full base model -- exactly the peak an adapter-only
+# save exists to avoid -- so it is not what this qualification may look at.
+FORMAT_KEY = "__verl_lora_checkpoint_format__"
+EXPECTED_FORMAT = "peft_adapter_v1"
 
 
-def adapter(root):
-    hits = sorted(root.rglob("adapter_model.safetensors")) + sorted(root.rglob("adapter_model.bin"))
-    if not hits:
-        raise SystemExit(f"no adapter written under {root}")
-    latest = max(hits, key=lambda p: p.stat().st_mtime)
-    if latest.suffix == ".safetensors":
-        from safetensors.torch import load_file
-        return latest, load_file(str(latest))
-    return latest, torch.load(latest, map_location="cpu")
+def adapter(root, step):
+    """The adapter saved at exactly `step`, verified to be a usable payload."""
+    directory = root / f"global_step_{step}"
+    if not directory.is_dir():
+        raise SystemExit(f"no checkpoint for step {step} under {root}")
+    shards = sorted(directory.glob("model_world_size_*_rank_*.pt"))
+    if not shards:
+        raise SystemExit(f"no adapter shard written in {directory}")
+
+    merged = {}
+    for shard in shards:
+        payload = torch.load(shard, map_location="cpu", weights_only=False)
+        marker = payload.pop(FORMAT_KEY, None)
+        if marker != EXPECTED_FORMAT:
+            raise SystemExit(f"{shard} is not an adapter-only checkpoint (marker {marker!r})")
+        for key, value in payload.items():
+            if not torch.is_tensor(value):
+                raise SystemExit(f"{shard}: {key} is {type(value).__name__}, not a tensor")
+            merged[f"{shard.name}:{key}"] = value
+    if not merged:
+        raise SystemExit(f"{directory}: adapter is empty")
+    for key, value in merged.items():
+        if value.numel() == 0:
+            raise SystemExit(f"{directory}: {key} has no elements")
+        if not torch.isfinite(value.float()).all():
+            raise SystemExit(f"{directory}: {key} is not finite")
+    return directory, merged
 
 
-ref_path, ref = adapter(reference)
-res_path, res = adapter(resumed)
-print(f"reference {ref_path}")
-print(f"resumed   {res_path}")
+def compare(left, right):
+    """Largest deviation, or a description of why they are not comparable."""
+    if set(left) != set(right):
+        only_left = sorted(set(left) - set(right))
+        only_right = sorted(set(right) - set(left))
+        return None, f"adapter keys differ: only in first {only_left}, only in second {only_right}"
+    worst, worst_key = 0.0, None
+    for key in sorted(left):
+        a, b = left[key].float(), right[key].float()
+        if a.shape != b.shape:
+            return None, f"{key}: shapes differ, {tuple(a.shape)} vs {tuple(b.shape)}"
+        delta = (a - b).abs().max().item()
+        # NaN fails every comparison, so it has to be rejected explicitly:
+        # `delta > worst` is False for NaN and would leave worst at zero.
+        if delta != delta:
+            return None, f"{key}: difference is NaN"
+        if delta > worst:
+            worst, worst_key = delta, key
+    return (worst, worst_key), None
 
-if set(ref) != set(res):
-    raise SystemExit(f"adapter keys differ: only in reference {sorted(set(ref) - set(res))}, "
-                     f"only in resumed {sorted(set(res) - set(ref))}")
 
-worst, worst_key = 0.0, None
-for key in sorted(ref):
-    a, b = ref[key].float(), res[key].float()
-    if a.shape != b.shape:
-        raise SystemExit(f"{key}: shapes differ, {tuple(a.shape)} vs {tuple(b.shape)}")
-    delta = (a - b).abs().max().item()
-    if delta > worst:
-        worst, worst_key = delta, key
+reference_path, reference_state = adapter(reference, total)
+resumed_path, resumed_state = adapter(resumed, total)
+print(f"reference {reference_path}")
+print(f"resumed   {resumed_path}")
+print(f"tensors   {len(reference_state)}")
 
 # BF16 training is not bit-reproducible across a restart, but a resume that
 # dropped the optimizer moments or reshuffled the data moves the adapter far
 # more than accumulation noise.
 tolerance = 1e-3
+result, problem = compare(reference_state, resumed_state)
+if problem:
+    raise SystemExit(f"resume does not reproduce the reference adapter: {problem}")
+worst, worst_key = result
 print(f"largest difference {worst:.3e} at {worst_key} (tolerance {tolerance:g})")
 if worst > tolerance:
     raise SystemExit("resume does not reproduce the reference adapter")
+
+# The tolerance only means something if a resume that really lost its optimizer
+# state lands outside it. Without this the check cannot tell a correct resume
+# from a run that silently restarted Adam.
+_, control_state = adapter(control, total)
+control_result, control_problem = compare(reference_state, control_state)
+if control_problem:
+    print(f"negative control differs structurally: {control_problem}")
+else:
+    control_worst, control_key = control_result
+    print(f"negative control difference {control_worst:.3e} at {control_key}")
+    if control_worst <= tolerance:
+        raise SystemExit(
+            "a resume without optimizer state reproduced the reference too: "
+            "this comparison cannot qualify anything"
+        )
+
 print("resume qualification passed")
-PY
+COMPARE
