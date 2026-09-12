@@ -49,7 +49,16 @@ def set_numa_affinity():
         else:
             local_rank = int(os.environ["LOCAL_RANK"])
         handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
-        pynvml.nvmlDeviceSetCpuAffinity(handle)
+        # NUMA placement must not expand a scheduler's or launcher's CPU budget.
+        allowed_cpus = os.sched_getaffinity(0)
+        bits_per_word = ctypes.sizeof(ctypes.c_ulong) * 8
+        mask_size = (max(allowed_cpus) + bits_per_word) // bits_per_word
+        numa_mask = pynvml.nvmlDeviceGetCpuAffinity(handle, mask_size)
+        preferred_cpus = {
+            cpu for cpu in allowed_cpus if numa_mask[cpu // bits_per_word] & (1 << (cpu % bits_per_word))
+        }
+        if preferred_cpus:
+            os.sched_setaffinity(0, preferred_cpus)
     except ImportError:
         print("Warning: pynvml not available, skipping NUMA affinity setup")
     except Exception as e:
