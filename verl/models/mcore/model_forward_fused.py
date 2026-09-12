@@ -136,14 +136,27 @@ def fused_output_processor(
 
 def _get_patching_model(model: torch.nn.Module):
     model = unwrap_model(model)
-    if isinstance(model, GPTModel):
-        return model
+    candidate = model if isinstance(model, GPTModel) else getattr(model, "language_model", model)
+    if isinstance(candidate, GPTModel):
+        return candidate
 
-    if not (hasattr(model, "language_model") and isinstance(model.language_model, GPTModel)):
-        print(f"Model {model.__class__.__name__} is not a supported for fused forward")
-        return None
+    # Keep optional hybrid-layer imports off the ordinary GPT path. HybridModel
+    # owns different decoder and postprocess semantics; the GPT forward rewrite
+    # must never be installed on it, including on older MCore versions.
+    from megatron.core.models.hybrid.hybrid_model import HybridModel
 
-    return model.language_model
+    if isinstance(candidate, HybridModel):
+        if getattr(candidate, _FUSED_FORWARD_MODE_ATTR, None) != _HOOK_MODE:
+            if not _supports_output_processor_hook(candidate):
+                raise ValueError(
+                    "HybridModel fused forward requires MCore's native output_processor hook; "
+                    "disable fused kernels or use a compatible Megatron-Core."
+                )
+            setattr(candidate, _FUSED_FORWARD_MODE_ATTR, _HOOK_MODE)
+        return candidate
+
+    print(f"Model {model.__class__.__name__} is not supported for fused forward")
+    return None
 
 
 def patch_fused_forward(model: torch.nn.Module):

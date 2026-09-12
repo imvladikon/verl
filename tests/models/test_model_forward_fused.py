@@ -19,6 +19,7 @@ import pytest
 import torch
 from megatron.core.distributed.distributed_data_parallel import DistributedDataParallel
 from megatron.core.models.gpt.gpt_model import GPTModel
+from megatron.core.models.hybrid.hybrid_model import HybridModel
 from megatron.core.transformer.module import Float16Module
 
 from verl.models.mcore import model_forward_fused as mff
@@ -30,13 +31,17 @@ def _new_uninitialized_model(model_cls=GPTModel):
     return model
 
 
-def test_mcore_gpt_forward_has_native_output_processor_contract():
-    parameters = inspect.signature(GPTModel.forward).parameters
+@pytest.mark.parametrize("model_cls", [GPTModel, HybridModel])
+def test_mcore_forward_has_native_output_processor_contract(model_cls):
+    parameters = inspect.signature(model_cls.forward).parameters
     assert {"output_processor", "output_processor_context"}.issubset(parameters)
 
 
-def test_native_hook_selection_preserves_forward_and_is_idempotent(monkeypatch):
-    model = _new_uninitialized_model()
+@pytest.mark.parametrize("model_cls", [GPTModel, HybridModel])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_hook_selection_preserves_forward_and_is_idempotent(monkeypatch, model_cls, wrapped):
+    model = _new_uninitialized_model(model_cls)
+    outer = SimpleNamespace(language_model=model) if wrapped else model
     original_forward = model.forward.__func__
     signature_calls = 0
     original_signature = inspect.signature
@@ -48,14 +53,29 @@ def test_native_hook_selection_preserves_forward_and_is_idempotent(monkeypatch):
 
     monkeypatch.setattr(mff.inspect, "signature", counted_signature)
 
-    mff.patch_fused_forward(model)
-    mff.patch_fused_forward(model)
-    mff.unpatch_fused_forward(model)
-    mff.unpatch_fused_forward(model)
-    mff.patch_fused_forward(model)
+    mff.patch_fused_forward(outer)
+    mff.patch_fused_forward(outer)
+    mff.unpatch_fused_forward(outer)
+    mff.unpatch_fused_forward(outer)
+    mff.patch_fused_forward(outer)
 
     assert signature_calls == 1
     assert getattr(model, mff._FUSED_FORWARD_MODE_ATTR) == mff._HOOK_MODE
+    assert model.forward.__func__ is original_forward
+    assert not hasattr(model, "forward_backup")
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_hybrid_without_hook_is_rejected_without_gpt_rewrite(wrapped):
+    class LegacyHybridModel(HybridModel):
+        def forward(self, input_ids=None):
+            return input_ids
+
+    model = _new_uninitialized_model(LegacyHybridModel)
+    outer = SimpleNamespace(language_model=model) if wrapped else model
+    original_forward = model.forward.__func__
+    with pytest.raises(ValueError, match="HybridModel fused forward requires"):
+        mff.patch_fused_forward(outer)
     assert model.forward.__func__ is original_forward
     assert not hasattr(model, "forward_backup")
 
@@ -162,19 +182,24 @@ class _Decoder(torch.nn.Module):
         return hidden_states
 
 
-def test_megatron_bridge_wrapper_chain_reaches_native_hook(monkeypatch):
+@pytest.mark.parametrize("model_cls", [GPTModel, HybridModel])
+@pytest.mark.parametrize("post_process", [False, True])
+def test_megatron_bridge_wrapper_chain_reaches_native_hook(monkeypatch, model_cls, post_process):
     """Exercise the Float16Module -> DDP stack built by Megatron Bridge."""
-    model = _new_uninitialized_model()
+    model = _new_uninitialized_model(model_cls)
     model.config = SimpleNamespace(
         fine_grained_activation_offloading=False,
         moe_paged_stash=False,
         mtp_num_layers=0,
         use_mup=False,
         sequence_parallel=False,
+        freeze_base_model_for_mtp=False,
+        cuda_graph_impl="none",
     )
     model.share_embeddings_and_output_weights = False
     model.mtp_process = False
-    model.post_process = True
+    model.post_process = post_process
+    model.position_embedding_type = None
     model.output_layer = _OutputLayer()
     model.decoder = _Decoder()
     model.pg_collection = SimpleNamespace(tp=None, cp=None)
@@ -219,6 +244,7 @@ def test_megatron_bridge_wrapper_chain_reaches_native_hook(monkeypatch):
         input_ids=torch.tensor([[1, 2]]),
         position_ids=torch.tensor([[0, 1]]),
         attention_mask=None,
+        decoder_input=hidden_states,
         labels=torch.tensor([1, 2]),
         output_processor=mff.fused_output_processor,
         output_processor_context=mff.FusedOutputProcessorContext(temperature=0.7),
@@ -227,6 +253,10 @@ def test_megatron_bridge_wrapper_chain_reaches_native_hook(monkeypatch):
 
     assert model.forward.__func__ is original_forward
     assert not hasattr(model, "forward_backup")
+    if not post_process:
+        assert output is hidden_states
+        assert not seen
+        return
     assert output.log_probs.tolist() == [1.0, 1.0]
     assert output.entropy.tolist() == [2.0, 2.0]
     assert seen["temperature"] == pytest.approx(0.7)
