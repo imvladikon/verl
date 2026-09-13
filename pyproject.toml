@@ -127,8 +127,10 @@ sglang = [
 # separate conflict fork: the user SGLang revision tracks torch 2.13 whereas the
 # generic backend matrix above remains on torch 2.11. This one extra contains
 # both the FSDP actor and SGLang rollout requirements used by the tiny SFT/GRPO
-# lifecycle under examples/glm53_flash.
-glm53-flash = [
+# lifecycle under examples/glm53_flash, plus the Megatron-Bridge fork for the Megatron actor
+# (GLM-5.2/5.3 and GLM-5.3-Flash). TransformerEngine is not included: its torch extension must be
+# built for the local torch/CUDA.
+glm = [
     "verl[verl-core]",
     "torch==2.13.0",
     "torchvision==0.28.0",
@@ -137,6 +139,9 @@ glm53-flash = [
     "torchao>=0.18",
     "sglang @ git+https://github.com/imvladikon/sglang.git@glm-5.x#subdirectory=python",
     "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@glm-5.x",
+    "megatron-bridge @ git+https://github.com/imvladikon/Megatron-Bridge.git@glm-5.x",
+    # Bridge reaches modelopt through megatron-core[dev], which the glm override drops.
+    "nvidia-modelopt>=0.44",
 ]
 
 # AutoModel SFT is isolated from the SGLang rollout environment because the
@@ -376,17 +381,17 @@ conflicts = [
     [{ extra = "vllm" }, { extra = "sglang" }, { extra = "cpu" }],
     [{ extra = "fsdp" }, { extra = "cpu" }],
     [{ extra = "megatron" }, { extra = "cpu" }],
-    [{ extra = "glm53-flash" }, { extra = "vllm" }],
-    [{ extra = "glm53-flash" }, { extra = "sglang" }],
-    [{ extra = "glm53-flash" }, { extra = "fsdp" }],
-    [{ extra = "glm53-flash" }, { extra = "megatron" }],
-    [{ extra = "glm53-flash" }, { extra = "cpu" }],
+    [{ extra = "glm" }, { extra = "vllm" }],
+    [{ extra = "glm" }, { extra = "sglang" }],
+    [{ extra = "glm" }, { extra = "fsdp" }],
+    [{ extra = "glm" }, { extra = "megatron" }],
+    [{ extra = "glm" }, { extra = "cpu" }],
     [{ extra = "glm53-automodel" }, { extra = "vllm" }],
     [{ extra = "glm53-automodel" }, { extra = "sglang" }],
     [{ extra = "glm53-automodel" }, { extra = "fsdp" }],
     [{ extra = "glm53-automodel" }, { extra = "megatron" }],
     [{ extra = "glm53-automodel" }, { extra = "cpu" }],
-    [{ extra = "glm53-automodel" }, { extra = "glm53-flash" }],
+    [{ extra = "glm53-automodel" }, { extra = "glm" }],
 ]
 
 # Global override pins:
@@ -414,7 +419,7 @@ override-dependencies = [
     "transformers==5.9.0 ; extra == 'sglang'",
     "transformers==5.9.0 ; extra == 'cpu'",
     "transformers>=5.9.0,<=5.16.1 ; extra == 'verl-core'",
-    "transformers==5.16.1 ; extra == 'glm53-flash'",
+    "transformers==5.16.1 ; extra == 'glm'",
     "transformers==5.16.1 ; extra == 'glm53-automodel'",
     "numpy>=2.0.0",
     "flash-attn-4 ; platform_machine == 'flash-attn-4-excluded'",
@@ -504,7 +509,10 @@ requires-dist = []
 apex                 = { index = "verl-wheelhouse" }
 flash-attn           = { index = "verl-wheelhouse" }
 transformer-engine   = { index = "verl-wheelhouse" }
-megatron-bridge      = { index = "verl-wheelhouse" }
+megatron-bridge      = [
+    { index = "verl-wheelhouse", extra = "megatron" },
+    { git = "https://github.com/imvladikon/Megatron-Bridge.git", rev = "glm-5.x", extra = "glm" },
+]
 
 # megatron-core / mbridge aren't in the wheelhouse; git-sourced (built at sync
 # time). The wheelhouse megatron-bridge 0.5.2 (r0.5.0 branch) pairs with
@@ -513,7 +521,7 @@ mbridge = { git = "https://github.com/ISEEKYAN/mbridge.git", rev = "641a5a0" }
 megatron-core = [
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "megatron" },
     { git = "https://github.com/NVIDIA/Megatron-LM.git", tag = "core_v0.18.0", extra = "cpu" },
-    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "glm-5.x", extra = "glm53-flash" },
+    { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "glm-5.x", extra = "glm" },
     { git = "https://github.com/imvladikon/Megatron-LM.git", rev = "glm-5.x", extra = "glm53-automodel" },
 ]
 
@@ -523,7 +531,7 @@ torch = [
     { index = "pytorch-cu130", extra = "sglang" },
     { index = "pytorch-cu130", extra = "fsdp" },
     { index = "pytorch-cu130", extra = "megatron" },
-    { index = "pytorch-cu130", extra = "glm53-flash" },
+    { index = "pytorch-cu130", extra = "glm" },
     { index = "pytorch-cu130", extra = "glm53-automodel" },
     { index = "pytorch-cpu",   extra = "cpu" },
     # trtllm (DEFERRED) would route to CUDA 13 here:
@@ -534,7 +542,7 @@ torchvision = [
     { index = "pytorch-cu130", extra = "sglang" },
     { index = "pytorch-cu130", extra = "fsdp" },
     { index = "pytorch-cu130", extra = "megatron" },
-    { index = "pytorch-cu130", extra = "glm53-flash" },
+    { index = "pytorch-cu130", extra = "glm" },
     { index = "pytorch-cu130", extra = "glm53-automodel" },
     { index = "pytorch-cpu",   extra = "cpu" },
 ]
@@ -543,7 +551,7 @@ torchaudio = [
     { index = "pytorch-cu130", extra = "sglang" },
     { index = "pytorch-cu130", extra = "fsdp" },
     { index = "pytorch-cu130", extra = "megatron" },
-    { index = "pytorch-cu130", extra = "glm53-flash" },
+    { index = "pytorch-cu130", extra = "glm" },
     { index = "pytorch-cpu",   extra = "cpu" },
 ]
 

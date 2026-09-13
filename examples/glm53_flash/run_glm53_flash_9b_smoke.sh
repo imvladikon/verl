@@ -20,7 +20,7 @@ if (( steps < 2 )); then
 fi
 
 if [[ ${VERL_USE_UV:-1} == 1 ]]; then
-  runner=(uv run --frozen --extra glm53-flash python)
+  runner=(uv run --frozen --extra glm python)
 else
   runner=(python3)
 fi

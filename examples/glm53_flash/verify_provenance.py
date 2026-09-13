@@ -29,6 +29,12 @@ EXPECTED = {
         "url": "https://github.com/imvladikon/Megatron-LM.git",
         "ref": "glm-5.x",
     },
+    "bridge": {
+        "distribution": "megatron-bridge",
+        "module": "megatron.bridge.package_info",
+        "url": "https://github.com/imvladikon/Megatron-Bridge.git",
+        "ref": "glm-5.x",
+    },
     "automodel": {
         "distribution": "nemo-automodel",
         "module": "nemo_automodel",
@@ -189,7 +195,7 @@ def _locked_commits(repo_root: Path, names: tuple[str, ...]) -> dict[str, str]:
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[2]
-    names = ("sglang", "megatron") if args.profile == "flash" else ("automodel", "megatron")
+    names = ("sglang", "megatron", "bridge") if args.profile == "flash" else ("automodel", "megatron")
     locked_commits = _locked_commits(repo_root, names)
     result = {
         "status": "pass",

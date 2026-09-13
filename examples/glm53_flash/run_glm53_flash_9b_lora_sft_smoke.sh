@@ -28,7 +28,7 @@ if (( rank <= 0 || alpha <= 0 )); then
 fi
 
 if [[ ${VERL_USE_UV:-1} == 1 ]]; then
-  runner=(uv run --frozen --extra glm53-flash torchrun --standalone --nnodes=1 --nproc_per_node=1)
+  runner=(uv run --frozen --extra glm torchrun --standalone --nnodes=1 --nproc_per_node=1)
 else
   runner=(torchrun --standalone --nnodes=1 --nproc_per_node=1)
 fi

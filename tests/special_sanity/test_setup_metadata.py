@@ -57,7 +57,7 @@ def test_fallback_metadata_matches_glm53_core_runtime(monkeypatch):
     for name in core.keys() - {"transformers"}:
         assert fallback[name] == core[name]
 
-    glm_transformers = _requirements_by_name(extras["glm53-flash"])["transformers"]
+    glm_transformers = _requirements_by_name(extras["glm"])["transformers"]
     glm_version = Version(next(iter(glm_transformers.specifier)).version)
     assert glm_version in fallback["transformers"].specifier
     assert Version("5.6.0") not in fallback["transformers"].specifier

@@ -16,6 +16,10 @@ extra would hide ABI conflicts rather than make the lifecycle reproducible.
 
 - SGLang: `imvladikon/sglang@glm-5.x`
 - Megatron-Core: `imvladikon/Megatron-LM@glm-5.x`
+- Megatron-Bridge: `imvladikon/Megatron-Bridge@glm-5.x`
+
+All three come with `verl[glm]` (`uv sync --extra glm`). TransformerEngine is not part of the extra:
+build its torch extension for the local torch/CUDA before running the Megatron actor.
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
 
 The dependency declarations and `uv.lock` both name immutable commits. The
