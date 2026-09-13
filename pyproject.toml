@@ -143,7 +143,7 @@ glm = [
     # megatron-bridge is installed deps-free (see [[tool.uv.dependency-metadata]]); these are the imports the
     # Megatron actor needs from its dependency list: modelopt (hard import) and FLA kernels for KDA.
     "nvidia-modelopt>=0.44",
-    "flash-linear-attention==0.5.1",
+    "flash-linear-attention==0.5.2",
 ]
 
 # AutoModel SFT is isolated from the SGLang rollout environment because the
