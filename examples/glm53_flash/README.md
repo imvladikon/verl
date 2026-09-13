@@ -19,7 +19,19 @@ extra would hide ABI conflicts rather than make the lifecycle reproducible.
 - Megatron-Bridge: `imvladikon/Megatron-Bridge@glm-5.x`
 
 All three come with `verl[glm]` (`uv sync --extra glm`). TransformerEngine is not part of the extra:
-build its torch extension for the local torch/CUDA before running the Megatron actor.
+Megatron-Bridge imports it at module load, so build it for the installed torch before running the Megatron
+actor. Verified on a clean `uv sync --frozen --extra glm` (torch 2.13.0+cu130, A100, CUDA 13.0 toolkit):
+
+```bash
+SITE=.venv/lib/python3.12/site-packages
+uv pip install setuptools wheel pybind11 ninja
+CUDA_HOME=/usr/local/cuda-13.0 NVTE_FRAMEWORK=pytorch NVTE_CUDA_ARCH_LIST=8.0 TORCH_CUDA_ARCH_LIST=8.0 \
+CUDNN_PATH=$SITE/nvidia/cudnn CPATH=$SITE/nvidia/nccl/include:$SITE/nvidia/cudnn/include \
+LIBRARY_PATH=$SITE/nvidia/nccl/lib:$SITE/nvidia/cudnn/lib \
+  uv pip install --no-build-isolation "transformer_engine[pytorch,core_cu13]==2.18.0"
+```
+
+apex is not installed either, so keep `override_transformer_config.gradient_accumulation_fusion=False`.
 - AutoModel: `NVIDIA-NeMo/Automodel@9228f33cf73d66a9b2e84256d298aac9a70283f0`
 
 The dependency declarations and `uv.lock` both name immutable commits. The

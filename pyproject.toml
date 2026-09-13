@@ -129,7 +129,7 @@ sglang = [
 # both the FSDP actor and SGLang rollout requirements used by the tiny SFT/GRPO
 # lifecycle under examples/glm53_flash, plus the Megatron-Bridge fork for the Megatron actor
 # (GLM-5.2/5.3 and GLM-5.3-Flash). TransformerEngine is not included: its torch extension must be
-# built for the local torch/CUDA.
+# built for the local torch/CUDA (see examples/glm53_flash/README.md).
 glm = [
     "verl[verl-core]",
     "torch==2.13.0",
@@ -140,8 +140,10 @@ glm = [
     "sglang @ git+https://github.com/imvladikon/sglang.git@glm-5.x#subdirectory=python",
     "megatron-core @ git+https://github.com/imvladikon/Megatron-LM.git@glm-5.x",
     "megatron-bridge @ git+https://github.com/imvladikon/Megatron-Bridge.git@glm-5.x",
-    # Bridge reaches modelopt through megatron-core[dev], which the glm override drops.
+    # megatron-bridge is installed deps-free (see [[tool.uv.dependency-metadata]]); these are the imports the
+    # Megatron actor needs from its dependency list: modelopt (hard import) and FLA kernels for KDA.
     "nvidia-modelopt>=0.44",
+    "flash-linear-attention==0.5.1",
 ]
 
 # AutoModel SFT is isolated from the SGLang rollout environment because the
