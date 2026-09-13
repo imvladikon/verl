@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import asyncio
-import dataclasses
 import json
 import logging
 import os
@@ -397,8 +396,9 @@ class SGLangHttpServer:
             # start sglang metrics
             args["enable_metrics"] = True
 
-        # enable_weights_cpu_backup is supported in sglang>=0.5.3
-        if "enable_weights_cpu_backup" in [f.name for f in dataclasses.fields(ServerArgs)]:
+        # Older SGLang uses a dataclass; newer versions expose msgspec fields
+        # as class descriptors. Both expose this optional field on the class.
+        if hasattr(ServerArgs, "enable_weights_cpu_backup"):
             # HYBRID mode also needs CPU weight backup so that:
             #   1. sleep() can release GPU weights to free memory for the training engine.
             #   2. naive update_weights() can call resume(tags=["weights"]) to reload weights

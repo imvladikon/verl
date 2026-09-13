@@ -276,9 +276,21 @@ class Worker(WorkerHelper):
             # RAY_EXPERIMENTAL_NOSET_*_VISIBLE_DEVICES is set,
             # so we need to set local rank when the flag is set.
             device_name = get_resource_name()
-            local_rank = ray.get_runtime_context().get_accelerator_ids()[device_name][0]
-            os.environ["LOCAL_RANK"] = local_rank
-            get_torch_device().set_device(int(local_rank))
+            assigned_id = str(ray.get_runtime_context().get_accelerator_ids()[device_name][0])
+            visible_devices = os.environ.get(get_visible_devices_keyword())
+            if visible_devices is not None:
+                # Ray reports IDs from the original visibility mask, including
+                # UUIDs. Torch indexes devices by their position in that mask.
+                visible_ids = [item.strip() for item in visible_devices.split(",") if item.strip()]
+                if assigned_id not in visible_ids:
+                    raise ValueError(
+                        f"Ray assigned device {assigned_id!r} outside the visible devices {visible_devices!r}"
+                    )
+                local_rank = visible_ids.index(assigned_id)
+            else:
+                local_rank = int(assigned_id)
+            os.environ["LOCAL_RANK"] = str(local_rank)
+            get_torch_device().set_device(local_rank)
 
     def _configure_with_store(self, store: dict):
         """
