@@ -37,6 +37,9 @@ FP8_DTYPE = torch.float8_e4m3fn
 FP8_MAX = torch.finfo(FP8_DTYPE).max
 FP8_MIN = -FP8_MAX
 
+# Bound each fallback tile's FP32 working tensor to 16 MiB (at least one block).
+_FP8_PYTORCH_CHUNK_ELEMENTS = 4 * 1024 * 1024
+
 
 def ceil_div(x: int, y: int) -> int:
     """Perform ceiling division of two integers."""
@@ -242,7 +245,41 @@ def _scaled_fp8_blockwise_pytorch(
     data_hp: torch.Tensor,
     weight_block_size: list[int] | tuple[int, int],
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """PyTorch implementation of blockwise FP8 quantization.
+    """Quantize block-aligned tiles without full-matrix FP32 scratch buffers.
+
+    The input is read-only, including FP32 tensors and noncontiguous views.
+    Output weights and scales retain their original block layout; only temporary
+    working tensors are tiled. A single unusually large block is the minimum
+    working allocation.
+    """
+    block_m, block_n = weight_block_size
+    assert block_m == block_n, "Block sizes must be equal"
+    m, n = data_hp.shape
+    num_block_m, num_block_n = ceil_div(m, block_m), ceil_div(n, block_n)
+    blocks_per_chunk = max(1, _FP8_PYTORCH_CHUNK_ELEMENTS // (block_m * block_n))
+    if num_block_m * num_block_n <= blocks_per_chunk:
+        return _scaled_fp8_blockwise_pytorch_chunk(data_hp, weight_block_size)
+
+    chunk_n = min(max(1, num_block_n), blocks_per_chunk)
+    chunk_m = max(1, blocks_per_chunk // chunk_n)
+    fp_data = torch.empty((m, n), dtype=FP8_DTYPE, device=data_hp.device)
+    descale = torch.empty((num_block_m, num_block_n, 1), dtype=torch.float32, device=data_hp.device)
+    for bi in range(0, num_block_m, chunk_m):
+        for bj in range(0, num_block_n, chunk_n):
+            row, col = bi * block_m, bj * block_n
+            tile = data_hp[row : row + chunk_m * block_m, col : col + chunk_n * block_n]
+            quantized, scale = _scaled_fp8_blockwise_pytorch_chunk(tile, weight_block_size)
+            fp_data[row : row + tile.shape[0], col : col + tile.shape[1]].copy_(quantized)
+            descale[bi : bi + scale.shape[0], bj : bj + scale.shape[1]].copy_(scale)
+            del quantized, scale, tile
+    return fp_data, descale
+
+
+def _scaled_fp8_blockwise_pytorch_chunk(
+    data_hp: torch.Tensor,
+    weight_block_size: list[int] | tuple[int, int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """PyTorch implementation for one block-aligned tile.
 
     Memory-optimized implementation that:
     - Uses in-place operations where possible
@@ -288,7 +325,9 @@ def _scaled_fp8_blockwise_pytorch(
     data_hp = data_hp.permute(0, 2, 1, 3).contiguous()
 
     # Flatten to (BLK_M, BLK_N, BLOCK_SIZE_M * BLOCK_SIZE_N) in float32 for precision
-    data_hp = data_hp.to(torch.float32).flatten(start_dim=2)
+    # contiguous() can return the original FP32 storage (e.g. one block column).
+    # Own the working buffer before mul_/clamp_ so exported parameters stay intact.
+    data_hp = data_hp.to(torch.float32, copy=True).flatten(start_dim=2)
 
     # Calculate max absolute value per block - use fused abs+amax
     max_abs = data_hp.abs().amax(dim=-1, keepdim=True)
