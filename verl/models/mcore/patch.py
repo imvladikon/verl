@@ -594,6 +594,29 @@ def apply_mtp_inference_patch():
 # When using checkpoint + MoE models (like Qwen3-30B-A3B and Qwen3-VL-30B-A3B),
 # input tensors and their grads will stay in gpu memory after forward_backward completes.
 # see https://github.com/NVIDIA/Megatron-LM/pull/3267
+def _checkpoint_owns_input(inp, detached) -> bool:
+    """Whether freeing a checkpoint input's storage cannot affect any other tensor.
+
+    Checkpoint inputs are often aliased: AbsorbedMLA passes the layer input (also saved by the
+    q/kv down projections) and a view of ``linear_kv_up_proj.weight`` into its core-attention
+    checkpoint. Freeing those corrupts later backward nodes and the parameter itself. The input is
+    exclusive only when its TensorImpl is held by nothing but its Python object and this
+    checkpoint's saved variable, and its storage by nothing but that TensorImpl, the detached copy
+    and the handle queried here. Any other holder raises a count, so the check fails closed.
+    """
+    import torch
+
+    return inp._use_count() == 2 and torch._C._storage_Use_Count(detached.untyped_storage()._cdata) == 3
+
+
+def _only_reference_to_grad(detached) -> bool:
+    """Whether the recomputed leaf's gradient storage is referenced only by that gradient."""
+    import torch
+
+    grad = detached.grad
+    return grad._use_count() == 2 and torch._C._storage_Use_Count(grad.untyped_storage()._cdata) == 2
+
+
 def apply_patch_megatron_recomputation_backward():
     import megatron.core.tensor_parallel.random as rd
     import torch
@@ -658,11 +681,12 @@ def apply_patch_megatron_recomputation_backward():
                 is_mtp_checkpoint = True
                 break
         if not is_mtp_checkpoint:
-            for t in detached_inputs:
+            for inp, t in zip(inputs, detached_inputs, strict=False):
                 if isinstance(t, torch.Tensor) and t.requires_grad:
-                    t.record_stream(cur_stream)
-                    t.untyped_storage().resize_(0)
-                    if t.grad is not None:
+                    if _checkpoint_owns_input(inp, t):
+                        t.record_stream(cur_stream)
+                        t.untyped_storage().resize_(0)
+                    if t.grad is not None and _only_reference_to_grad(t):
                         t.grad.record_stream(cur_stream)
                         t.grad.untyped_storage().resize_(0)
         # ctx.saved_tensors = None
