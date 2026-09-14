@@ -1747,6 +1747,19 @@ def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
     from megatron.core.distributed import finalize_model_grads
     from megatron.core.utils import get_model_config
 
+    if any(getattr(param, "expert_parallel_replicated", False) for chunk in model for param in chunk.parameters()):
+        # Bridge marks adapters shared across routed experts as EP-replicated.
+        # Fused wgrad writes main_grad and bypasses their eager gradient hooks;
+        # reduce once after DDP finalization, removing eager hooks to avoid a
+        # second EP sum when gradient_accumulation_fusion is disabled.
+        from megatron.bridge.peft.utils import (
+            enable_expert_parallel_grad_sync_in_finalize,
+            finalize_model_grads_with_expert_adapter_sync,
+        )
+
+        enable_expert_parallel_grad_sync_in_finalize(model)
+        finalize_model_grads = finalize_model_grads_with_expert_adapter_sync
+
     # register some callbacks for megatron training, following https://github.com/NVIDIA/Megatron-LM/blob/core_v0.15.0rc7/megatron/training/training.py#L2039-L2057
     for one_model in model:
         config = get_model_config(one_model)
