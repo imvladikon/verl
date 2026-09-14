@@ -138,7 +138,9 @@ def normalize_final_answer(final_answer: str) -> str:
     for expr in REMOVED_EXPRESSIONS:
         final_answer = final_answer.replace(expr, "")
 
-    # Extract and normalize LaTeX math
+    # Extract and normalize LaTeX math; \(...\) and \[...\] delimit math like $...$
+    for delimiter in ("\\(", "\\)", "\\[", "\\]"):
+        final_answer = final_answer.replace(delimiter, "$")
     final_answer = re.sub(r"(.*?)(\$)(.*?)(\$)(.*)", "$\\3$", final_answer)
     final_answer = re.sub(r"(\\text\{)(.*?)(\})", "\\2", final_answer)
     final_answer = re.sub(r"(\\textbf\{)(.*?)(\})", "\\2", final_answer)
