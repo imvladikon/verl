@@ -99,6 +99,8 @@ class ServerConfig(BaseConfig):
     """
 
     timeout: float = 60.0
+    # Includes queueing and decoding; distinct from short control RPC timeouts.
+    generation_timeout: float = 1800.0
     max_attempts: int = 3
     retry_delay: float = 2.0
     max_connections: int = 1000
