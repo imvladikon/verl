@@ -332,6 +332,8 @@ dependencies = [
     { name = "packaging" },
 ]
 wheels = [
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/apex-master-py3.11/apex-0.1-cp311-cp311-linux_aarch64.whl" },
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/apex-master-py3.11/apex-0.1-cp311-cp311-linux_x86_64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/apex-master/apex-0.1-cp312-cp312-linux_aarch64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/apex-master/apex-0.1-cp312-cp312-linux_x86_64.whl" },
 ]
@@ -1254,6 +1256,8 @@ dependencies = [
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-4-verl-glm' or extra == 'extra-4-verl-glm53-automodel' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra != 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra != 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra != 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra != 'extra-4-verl-cpu' and extra != 'extra-4-verl-fsdp' and extra != 'extra-4-verl-megatron' and extra != 'extra-4-verl-sglang' and extra != 'extra-4-verl-vllm')" },
 ]
 wheels = [
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-attention-v2.8.3-py3.11/flash_attn-2.8.3-cp311-cp311-linux_aarch64.whl" },
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-attention-v2.8.3-py3.11/flash_attn-2.8.3-cp311-cp311-linux_x86_64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-attention-v2.8.3/flash_attn-2.8.3-cp312-cp312-linux_aarch64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/flash-attention-v2.8.3/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl" },
 ]
@@ -2552,7 +2556,7 @@ wheels = [
 [[package]]
 name = "megatron-bridge"
 version = "0.5.2"
-source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#2c01dc869ae7d9c24b23db1ebf3ea2d24a1eaf9c" }
+source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#9a41cd0a5d27ad7f41d3126855c7f6f593fdc83d" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -2576,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "megatron-core"
 version = "0.18.0"
-source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#5ca1cc95402ca1a7f031036cccb3aa30b656fa14" }
+source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -5344,8 +5348,8 @@ wheels = [
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev18422+gd563068f5"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#d563068f579345fa52780922cf3aa38cb6d24f8b" }
+version = "0.0.0.dev18462+g7512d6f52"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#7512d6f52445a67923573809c383ceccd60a9ebf" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -5405,7 +5409,7 @@ dependencies = [
     { name = "setproctitle" },
     { name = "sgl-deep-ep" },
     { name = "sgl-deep-gemm", version = "0.1.7", source = { registry = "https://pypi.org/simple" } },
-    { name = "sglang-kernel", version = "0.4.6.post1", source = { registry = "https://pypi.org/simple" } },
+    { name = "sglang-kernel", version = "0.4.7", source = { registry = "https://pypi.org/simple" } },
     { name = "smg-grpc-servicer" },
     { name = "soundfile" },
     { name = "tiktoken" },
@@ -5526,15 +5530,18 @@ wheels = [
 
 [[package]]
 name = "sglang-kernel"
-version = "0.4.6.post1"
+version = "0.4.7"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
+dependencies = [
+    { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
+]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/a9/5ef33ef2e387455c0c6317802db2faf37dcc91867c7f09c3ec4e6b6da1a2/sglang_kernel-0.4.6.post1-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:7eccd61408b44b55ab35cdbcf8a05243ce2a9a5e781fabb00da375af7d7130a1", size = 30741582, upload-time = "2026-08-06T09:50:00.893Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/d9/fd8d0b81f6e14bb1f5afcdbe99e7cd8a3862b7b70450660217ad70df59ee/sglang_kernel-0.4.6.post1-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:5fee1007113c988bf6d448eca4706f7959631d449a429eb790a70bf89ab0ef04", size = 377094734, upload-time = "2026-08-06T09:17:50.774Z" },
+    { url = "https://files.pythonhosted.org/packages/77/6f/1644c1accba3150ed8784600444f8d62433e9a38bc517ed72f8b7f8fa0f8/sglang_kernel-0.4.7-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:c4bb10b1bee183c441b352c4aaf203ce34627c27ed87a5cc4036c98aa557b81e", size = 27273260, upload-time = "2026-09-13T23:15:04.171Z" },
+    { url = "https://files.pythonhosted.org/packages/63/db/45fcc5dc66de8e8f2e63c908b30bc309f20086d6b063a1aaa813c6dc478f/sglang_kernel-0.4.7-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:666f39de214a1558c5a98f43e6562e1032d8d08823b61f6a307830882f3241ce", size = 373107099, upload-time = "2026-09-13T22:54:51.625Z" },
 ]
 
 [[package]]
@@ -6499,6 +6506,7 @@ dependencies = [
     { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
 ]
 wheels = [
+    { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1-py3.11/transformer_engine-2.16.1-cp311-cp311-linux_aarch64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_aarch64.whl" },
     { url = "https://github.com/verl-project/verl-wheelhouse/releases/download/transformer-engine-v2.16.1/transformer_engine-2.16.1-cp312-cp312-linux_x86_64.whl" },
 ]
@@ -6857,8 +6865,8 @@ glm = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#2c01dc869ae7d9c24b23db1ebf3ea2d24a1eaf9c" } },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#5ca1cc95402ca1a7f031036cccb3aa30b656fa14" } },
+    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#9a41cd0a5d27ad7f41d3126855c7f6f593fdc83d" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" } },
     { name = "numpy" },
     { name = "nvidia-modelopt" },
     { name = "nvtx" },
@@ -6873,7 +6881,7 @@ glm = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev18422+gd563068f5", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#d563068f579345fa52780922cf3aa38cb6d24f8b" } },
+    { name = "sglang", version = "0.0.0.dev18462+g7512d6f52", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#7512d6f52445a67923573809c383ceccd60a9ebf" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -6898,7 +6906,7 @@ glm53-automodel = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#5ca1cc95402ca1a7f031036cccb3aa30b656fa14" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" } },
     { name = "nemo-automodel" },
     { name = "numpy" },
     { name = "nvtx" },
