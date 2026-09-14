@@ -54,6 +54,7 @@ from verl.utils.profiler import (
 from verl.utils.tracking import RLInsightLogger
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.replica import RolloutMode, RolloutReplica, TokenOutput
+from verl.workers.rollout.sglang_rollout.response_guard import await_scheduler_response
 from verl.workers.rollout.sglang_rollout.sglang_rollout import (
     _assert_sglang_weight_sync_capabilities,
     _set_envs_and_config,
@@ -73,9 +74,7 @@ logger.setLevel(logging.INFO)
 visible_devices_keyword = get_visible_devices_keyword()
 
 
-def _set_default_weights_cpu_backup(
-    args: dict[str, Any], *, rollout_mode: RolloutMode, lora_rank: int
-) -> None:
+def _set_default_weights_cpu_backup(args: dict[str, Any], *, rollout_mode: RolloutMode, lora_rank: int) -> None:
     args.setdefault(
         "enable_weights_cpu_backup",
         rollout_mode in (RolloutMode.COLOCATED, RolloutMode.HYBRID) or lora_rank > 0,
@@ -518,6 +517,26 @@ class SGLangHttpServer:
         self._server_port, self._server_task = await run_uvicorn(app, server_args, self._server_address)
         self.tokenizer_manager.server_status = ServerStatus.Up
 
+    def _scheduler_process_failure(self) -> str | None:
+        watchdog = getattr(self.tokenizer_manager, "_subprocess_watchdog", None)
+        processes = getattr(watchdog, "_processes", ())
+        names = getattr(watchdog, "_names", ())
+        for index, process in enumerate(processes):
+            code = process.exitcode
+            if code is not None:
+                name = names[index] if index < len(names) else f"subprocess_{index}"
+                return f"{name} (pid={process.pid}) exited with code {code}"
+        return None
+
+    async def _await_scheduler_response(self, response, operation: str, *, generation: bool = False):
+        timeout = self.config.server.generation_timeout if generation else self.config.server.timeout
+        return await await_scheduler_response(
+            response,
+            timeout=timeout,
+            description=f"replica={self.replica_rank} node={self.node_rank} {operation}",
+            process_failure=self._scheduler_process_failure,
+        )
+
     async def wake_up(self):
         if self.node_rank != 0:
             return
@@ -529,13 +548,17 @@ class SGLangHttpServer:
             # Resume exactly what sleep() released; adapter mode keeps the base weights resident.
             tags = ["kv_cache"] if self.lora_as_adapter else ["kv_cache", "weights"]
             obj = ResumeMemoryOccupationReqInput(tags=tags)
-            await self.tokenizer_manager.resume_memory_occupation(obj, None)
-            await self.tokenizer_manager.flush_cache()
+            await self._await_scheduler_response(
+                self.tokenizer_manager.resume_memory_occupation(obj, None), f"resume_memory_occupation tags={obj.tags}"
+            )
+            await self._await_scheduler_response(self.tokenizer_manager.flush_cache(), "flush_cache")
         elif self.rollout_mode == RolloutMode.STANDALONE:
             # In standalone mode, resume kv_cache if free_cache_engine is enabled
             obj = ResumeMemoryOccupationReqInput(tags=["kv_cache"])
-            await self.tokenizer_manager.resume_memory_occupation(obj, None)
-            await self.tokenizer_manager.flush_cache()
+            await self._await_scheduler_response(
+                self.tokenizer_manager.resume_memory_occupation(obj, None), f"resume_memory_occupation tags={obj.tags}"
+            )
+            await self._await_scheduler_response(self.tokenizer_manager.flush_cache(), "flush_cache")
 
     @property
     def lora_as_adapter(self) -> bool:
@@ -556,33 +579,46 @@ class SGLangHttpServer:
 
         if self.rollout_mode == RolloutMode.HYBRID:
             obj = ReleaseMemoryOccupationReqInput(tags=tags)
-            await self.tokenizer_manager.release_memory_occupation(obj, None)
+            await self._await_scheduler_response(
+                self.tokenizer_manager.release_memory_occupation(obj, None),
+                f"release_memory_occupation tags={obj.tags}",
+            )
         elif self.rollout_mode == RolloutMode.COLOCATED:
             obj = ReleaseMemoryOccupationReqInput(tags=tags)
-            await self.tokenizer_manager.release_memory_occupation(obj, None)
+            await self._await_scheduler_response(
+                self.tokenizer_manager.release_memory_occupation(obj, None),
+                f"release_memory_occupation tags={obj.tags}",
+            )
         elif self.rollout_mode == RolloutMode.STANDALONE:
             # In standalone mode, resume kv_cache if free_cache_engine is enabled
             obj = ReleaseMemoryOccupationReqInput(tags=["kv_cache"])
-            await self.tokenizer_manager.release_memory_occupation(obj, None)
+            await self._await_scheduler_response(
+                self.tokenizer_manager.release_memory_occupation(obj, None),
+                f"release_memory_occupation tags={obj.tags}",
+            )
 
     async def clear_kv_cache(self):
         if self.node_rank == 0:
-            await self.tokenizer_manager.flush_cache()
+            await self._await_scheduler_response(self.tokenizer_manager.flush_cache(), "flush_cache")
 
     async def release_kv_cache(self):
         """Release only kv_cache GPU memory, keeping model weights intact."""
         if self.node_rank != 0 or not self.config.free_cache_engine:
             return
         obj = ReleaseMemoryOccupationReqInput(tags=["kv_cache"])
-        await self.tokenizer_manager.release_memory_occupation(obj, None)
+        await self._await_scheduler_response(
+            self.tokenizer_manager.release_memory_occupation(obj, None), f"release_memory_occupation tags={obj.tags}"
+        )
 
     async def resume_kv_cache(self):
         """Restore kv_cache GPU memory after a weight sync. Counterpart to release_kv_cache()."""
         if self.node_rank != 0 or not self.config.free_cache_engine:
             return
         obj = ResumeMemoryOccupationReqInput(tags=["kv_cache"])
-        await self.tokenizer_manager.resume_memory_occupation(obj, None)
-        await self.tokenizer_manager.flush_cache()
+        await self._await_scheduler_response(
+            self.tokenizer_manager.resume_memory_occupation(obj, None), f"resume_memory_occupation tags={obj.tags}"
+        )
+        await self._await_scheduler_response(self.tokenizer_manager.flush_cache(), "flush_cache")
 
     async def generate(
         self,
@@ -693,7 +729,11 @@ class SGLangHttpServer:
             generate_request.lora_path = SGLANG_LORA_NAME
 
         with RLInsightLogger.trace_state("sglang_generate", state_lane_id=f"replica_{self.replica_rank}"):
-            output = await self.tokenizer_manager.generate_request(generate_request, None).__anext__()
+            output = await self._await_scheduler_response(
+                self.tokenizer_manager.generate_request(generate_request, None).__anext__(),
+                f"generate request_id={request_id}",
+                generation=True,
+            )
         meta_info = output.get("meta_info", {})
         finish_reason = meta_info.get("finish_reason")
         finish_reason = finish_reason["type"] if finish_reason else None
