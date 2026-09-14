@@ -1743,15 +1743,36 @@ def get_transformer_layer_offset(pipeline_rank, vp_stage, config: TransformerCon
     return offset
 
 
-def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
+def _finalize_model_grads_func(model: list[torch.nn.Module]):
+    """Megatron's finalize step, plus Bridge's once-per-step EP sum of adapters replicated across EP.
+
+    Bridge tags LoRA weights shared by every expert (``share_expert_adapters``, shared-outer adapters) as EP
+    replicated; MCore's expert DDP only reduces them over expert-DP. Without Bridge's finalize wrapper only a
+    per-layer fallback hook sums them, which cannot see gradients accumulated into ``main_grad`` by
+    ``gradient_accumulation_fusion`` and lets the replicas drift apart across EP ranks.
+    """
     from megatron.core.distributed import finalize_model_grads
+
+    try:
+        from megatron.bridge.peft.utils import (
+            enable_expert_parallel_grad_sync_in_finalize,
+            finalize_model_grads_with_expert_adapter_sync,
+        )
+    except ImportError:
+        return finalize_model_grads
+    enable_expert_parallel_grad_sync_in_finalize(model)
+    return finalize_model_grads_with_expert_adapter_sync
+
+
+def register_megatron_training_hooks(model: list[torch.nn.Module], optimizer):
     from megatron.core.utils import get_model_config
 
+    finalize_model_grads_func = _finalize_model_grads_func(model)
     # register some callbacks for megatron training, following https://github.com/NVIDIA/Megatron-LM/blob/core_v0.15.0rc7/megatron/training/training.py#L2039-L2057
     for one_model in model:
         config = get_model_config(one_model)
         config.grad_scale_func = optimizer.scale_loss
-        config.finalize_model_grads_func = finalize_model_grads
+        config.finalize_model_grads_func = finalize_model_grads_func
 
         overlap_param_gather = getattr(optimizer.config, "overlap_param_gather", False)
         overlap_grad_reduce = getattr(one_model.ddp_config, "overlap_grad_reduce", False)
