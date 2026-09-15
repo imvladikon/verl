@@ -74,6 +74,53 @@ logger.setLevel(logging.INFO)
 visible_devices_keyword = get_visible_devices_keyword()
 
 
+_REPORTED_SGLANG_BACKENDS = (
+    "kv_cache_dtype",
+    "attention_backend",
+    "dsa_prefill_backend",
+    "dsa_decode_backend",
+    "dsa_topk_backend",
+    "dsa_paged_mqa_logits_backend",
+    "linear_attn_backend",
+    "linear_attn_prefill_backend",
+    "linear_attn_decode_backend",
+    "moe_runner_backend",
+    "disable_cuda_graph",
+)
+
+
+def describe_sglang_backends(server_args: Any) -> str:
+    """One line with the kernel backends SGLang resolved (after its overrides), for the worker log."""
+    try:
+        from sglang.srt.arg_groups.overrides import resolution_result
+    except ImportError:  # older SGLang keeps resolved values on the fields
+
+        def resolution_result(args, field, default=None):
+            return getattr(args, field, default)
+
+    parts = []
+    for field in _REPORTED_SGLANG_BACKENDS:
+        if not hasattr(server_args, field):
+            continue
+        try:
+            value = resolution_result(server_args, field, getattr(server_args, field))
+        except Exception:
+            value = getattr(server_args, field)
+        parts.append(f"{field}={value}")
+    parts.append(f"SGLANG_DSA_FUSE_TOPK={os.environ.get('SGLANG_DSA_FUSE_TOPK', '<default>')}")
+    return " ".join(parts)
+
+
+def uses_dsa_attention(hf_config: Any) -> bool:
+    """DSA models (``index_topk``) need SGLang's sparse ``dsa`` attention backend.
+
+    SGLang selects it only when no attention backend is given; an explicit dense backend
+    (fa3/flashinfer/triton) would run full MLA and ignore the indexer and every DSA option.
+    """
+    text_config = getattr(hf_config, "text_config", None)
+    return any(getattr(config, "index_topk", None) is not None for config in (hf_config, text_config) if config)
+
+
 def _set_default_weights_cpu_backup(args: dict[str, Any], *, rollout_mode: RolloutMode, lora_rank: int) -> None:
     args.setdefault(
         "enable_weights_cpu_backup",
@@ -309,7 +356,7 @@ class SGLangHttpServer:
 
             if LOADER_FQN not in custom_weight_loader:
                 custom_weight_loader.append(LOADER_FQN)
-        if attention_backend is None:
+        if attention_backend is None and not uses_dsa_attention(self.model_config.hf_config):
             if torch.version.hip is not None:
                 attention_backend = "aiter"
             elif version.parse(sglang.__version__) >= version.parse("0.5.12"):
@@ -488,6 +535,9 @@ class SGLangHttpServer:
             self.tokenizer_manager, self.template_manager, self.scheduler_info, *_ = _launch_subprocesses(
                 server_args=server_args
             )
+
+        backends = describe_sglang_backends(server_args)
+        logger.warning(f"SGLang backends replica={self.replica_rank} node={self.node_rank}: {backends}")
 
         # In multi-node cases, non-zero rank nodes should not launch http server.
         if self.node_rank > 0:
