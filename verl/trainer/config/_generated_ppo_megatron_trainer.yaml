@@ -428,6 +428,14 @@ actor_rollout_ref:
           steps: null
           stages: ${oc.select:actor_rollout_ref.actor.profiler.tool_config.precision_debugger.stages,${oc.select:global_profiler.global_tool_config.precision_debugger.stages,null}}
           strict: ${oc.select:actor_rollout_ref.actor.profiler.tool_config.precision_debugger.strict,${oc.select:global_profiler.global_tool_config.precision_debugger.strict,False}}
+    server:
+      _target_: verl.workers.config.ServerConfig
+      timeout: 60.0
+      generation_timeout: 1800.0
+      max_attempts: 3
+      retry_delay: 2.0
+      max_connections: 1000
+      max_start_wait_time: 300.0
     prometheus:
       _target_: verl.workers.config.PrometheusConfig
       enable: false
@@ -458,6 +466,7 @@ actor_rollout_ref:
     override_config: {}
     enable_gradient_checkpointing: true
     enable_activation_offload: false
+    freeze_vision_tower: false
     use_remove_padding: true
     lora_rank: 0
     lora_alpha: 16
@@ -720,6 +729,7 @@ critic:
     override_config: {}
     enable_gradient_checkpointing: true
     enable_activation_offload: false
+    freeze_vision_tower: false
     use_remove_padding: true
     lora_rank: 0
     lora_alpha: 16

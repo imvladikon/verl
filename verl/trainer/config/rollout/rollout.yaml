@@ -451,6 +451,30 @@ profiler:
       # Whether to fail on unknown stage or missing msprobe
       strict: ${oc.select:actor_rollout_ref.actor.profiler.tool_config.precision_debugger.strict,${oc.select:global_profiler.global_tool_config.precision_debugger.strict,False}}
 
+# HTTP server and scheduler RPC limits for server-mode rollout
+server:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.ServerConfig
+
+  # Timeout in seconds for HTTP calls and scheduler control RPCs (sleep/wake_up, memory release/resume, flush)
+  timeout: 60.0
+
+  # Timeout in seconds for one generation request, including queueing and decoding
+  generation_timeout: 1800.0
+
+  # Maximum attempts for a failed HTTP request
+  max_attempts: 3
+
+  # Delay in seconds between HTTP retries
+  retry_delay: 2.0
+
+  # Maximum number of concurrent HTTP connections
+  max_connections: 1000
+
+  # Maximum time in seconds to wait for the server to start
+  max_start_wait_time: 300.0
+
 # prometheus configuration for vllm/sglang server mode
 prometheus:
 
