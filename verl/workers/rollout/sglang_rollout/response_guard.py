@@ -16,6 +16,7 @@
 
 import asyncio
 import math
+import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
@@ -33,29 +34,37 @@ async def await_scheduler_response(
     timeout: float,
     description: str,
     process_failure: Callable[[], str | None],
+    last_scheduler_output: Callable[[], float] | None = None,
 ) -> _T:
-    """Wait for a response, scheduler exit, or a finite request deadline.
+    """Wait for a response, scheduler exit, or a finite deadline.
 
     A tokenizer HTTP process can stay healthy after its scheduler dies. Checking
     HTTP health therefore cannot replace checking the owned subprocess handles.
     The deadline also covers versions which do not expose those handles.
+
+    Without ``last_scheduler_output`` the deadline counts from the call. With it
+    (a ``time.time()`` timestamp of the scheduler's latest output on this replica)
+    the deadline counts from the later of the call and that output, so requests
+    queued behind a busy but live scheduler never time out, while a scheduler that
+    stops producing any output still fails after ``timeout`` seconds.
     """
     task = asyncio.ensure_future(response)
     try:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("SGLang response timeout must be a positive finite number")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
+        started = time.time()
         while True:
             if task.done():
                 return task.result()
             failure = process_failure()
             if failure is not None:
                 raise RuntimeError(f"SGLang {description} failed: {failure}. Check the scheduler log for the cause.")
-            remaining = deadline - loop.time()
+            last_output = last_scheduler_output() if last_scheduler_output is not None else started
+            remaining = max(started, last_output) + timeout - time.time()
             if remaining <= 0:
+                waited = "no scheduler output" if last_scheduler_output is not None else "no scheduler response"
                 raise TimeoutError(
-                    f"SGLang {description} received no scheduler response within {timeout:g}s. "
+                    f"SGLang {description} received {waited} within {timeout:g}s. "
                     "The HTTP process may still be alive; check the scheduler log for a crash or CUDA OOM."
                 )
             await asyncio.wait({task}, timeout=min(1.0, remaining))

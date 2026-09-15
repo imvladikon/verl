@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import time
 
 import pytest
 
@@ -157,5 +158,63 @@ def test_invalid_timeout_rejects_and_cancels_request(timeout):
                 response, timeout=timeout, description="generate", process_failure=lambda: None
             )
         assert response.cancelled()
+
+    asyncio.run(run())
+
+
+def test_queued_generation_survives_while_scheduler_keeps_producing_output():
+    async def run():
+        last_output = [time.time()]
+
+        async def scheduler_progress():
+            for _ in range(10):
+                await asyncio.sleep(0.05)
+                last_output[0] = time.time()
+
+        async def queued_response():
+            await asyncio.sleep(0.5)  # longer than the timeout, but the scheduler keeps emitting output
+            return {"token_ids": [7]}
+
+        progress = asyncio.create_task(scheduler_progress())
+        result = await await_scheduler_response(
+            queued_response(),
+            timeout=0.2,
+            description="generate",
+            process_failure=lambda: None,
+            last_scheduler_output=lambda: last_output[0],
+        )
+        await progress
+        assert result == {"token_ids": [7]}
+
+    asyncio.run(run())
+
+
+def test_silent_scheduler_times_out_generation():
+    async def run():
+        stale_output = time.time() - 3600
+        response = asyncio.get_running_loop().create_future()
+        started = time.time()
+        with pytest.raises(TimeoutError, match="no scheduler output within 0.2s"):
+            await await_scheduler_response(
+                response,
+                timeout=0.2,
+                description="generate",
+                process_failure=lambda: None,
+                last_scheduler_output=lambda: stale_output,
+            )
+        # The deadline counts from the call when the last output is older than the request.
+        assert 0.15 <= time.time() - started < 1.5
+        assert response.cancelled()
+
+    asyncio.run(run())
+
+
+def test_control_rpc_deadline_counts_from_the_call():
+    async def run():
+        response = asyncio.get_running_loop().create_future()
+        with pytest.raises(TimeoutError, match="no scheduler response within 0.2s"):
+            await await_scheduler_response(
+                response, timeout=0.2, description="flush_cache", process_failure=lambda: None
+            )
 
     asyncio.run(run())

@@ -1015,6 +1015,9 @@ class PPOTrainer(ABC):
         dump_all_outputs: list[str] = []
         dump_all_keys: list[str] = []
         session_to_sample_idx: dict[str, int] = {}
+        submitted_prompts = 0
+        returned_prompts = 0
+        returned_sessions = 0
 
         for batch_dict in self.val_dataloader:
             # 1. put batch to agent loop manager
@@ -1033,8 +1036,19 @@ class PPOTrainer(ABC):
             self.agent_loop_manager.generate_sequences(batch)
 
             # 2. sample batch from replay buffer: one prompt (GRPO group) per submitted row.
+            submitted_prompts += len(batch)
             batch, _ = self.replay_buffer.sample(
                 global_steps=self.global_steps, partition_id="val", batch_size=len(batch)
+            )
+            # Validation keeps failed groups, but sessions that raised (e.g. a generation error) have no outputs and
+            # drop out of the batch; count them so the metrics below are not silently computed over a biased subset.
+            returned_prompts += len({key.rsplit("_", 2)[0] for key in batch.keys})
+            returned_sessions += len(
+                {
+                    f"{parts[0]}_{parts[1]}" if len(parts) == 3 else key
+                    for key in batch.keys
+                    for parts in [key.rsplit("_", 2)]
+                }
             )
 
             # 3. [OPTIONAL] compute reward score with colocated reward model
@@ -1154,7 +1168,19 @@ class PPOTrainer(ABC):
                 dump_path=val_data_dir,
             )
 
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        metric_dict = self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        failed_prompts = submitted_prompts - returned_prompts
+        expected_sessions = submitted_prompts * self.config.actor_rollout_ref.rollout.val_kwargs.n
+        failed_sessions = max(expected_sessions - returned_sessions, 0)
+        metric_dict["val-aux/failed_prompts"] = failed_prompts
+        metric_dict["val-aux/failed_sessions"] = failed_sessions
+        metric_dict["val-aux/failed_session_ratio"] = failed_sessions / expected_sessions if expected_sessions else 0.0
+        if failed_sessions or failed_prompts:
+            logger.error(
+                f"Validation lost {failed_sessions}/{expected_sessions} sessions ({failed_prompts}/{submitted_prompts} "
+                "prompts without any output) after rollout errors; val metrics cover only what finished."
+            )
+        return metric_dict
 
     def _maybe_log_val_generations(self, inputs, outputs, scores):
         """Log a table of validation samples to the configured logger (wandb or swanlab)"""

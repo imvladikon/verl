@@ -530,11 +530,21 @@ class SGLangHttpServer:
 
     async def _await_scheduler_response(self, response, operation: str, *, generation: bool = False):
         timeout = self.config.server.generation_timeout if generation else self.config.server.timeout
+        # A generation request may wait in the scheduler queue far longer than any single request takes
+        # (e.g. validation over hundreds of prompts), so it only times out when the scheduler stops producing
+        # output. Control RPCs keep a per-call deadline.
+        last_scheduler_output = None
+        if generation and hasattr(self.tokenizer_manager, "last_receive_tstamp"):
+
+            def last_scheduler_output():
+                return self.tokenizer_manager.last_receive_tstamp
+
         return await await_scheduler_response(
             response,
             timeout=timeout,
             description=f"replica={self.replica_rank} node={self.node_rank} {operation}",
             process_failure=self._scheduler_process_failure,
+            last_scheduler_output=last_scheduler_output,
         )
 
     async def wake_up(self):

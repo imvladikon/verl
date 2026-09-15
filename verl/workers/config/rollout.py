@@ -99,7 +99,8 @@ class ServerConfig(BaseConfig):
     """
 
     timeout: float = 60.0
-    # Includes queueing and decoding; distinct from short control RPC timeouts.
+    # SGLang: longest silence from the replica's scheduler while a generation request waits (queueing behind a
+    # live scheduler does not count); distinct from the per-call control RPC timeout.
     generation_timeout: float = 1800.0
     max_attempts: int = 3
     retry_delay: float = 2.0

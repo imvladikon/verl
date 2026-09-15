@@ -460,7 +460,8 @@ server:
   # Timeout in seconds for HTTP calls and scheduler control RPCs (sleep/wake_up, memory release/resume, flush)
   timeout: 60.0
 
-  # Timeout in seconds for one generation request, including queueing and decoding
+  # SGLang: seconds a generation request may wait with no output at all from its replica's scheduler.
+  # Queueing behind a busy but live scheduler does not count; a crashed or wedged scheduler fails after this.
   generation_timeout: 1800.0
 
   # Maximum attempts for a failed HTTP request
