@@ -67,3 +67,64 @@ def test_gpt_oss_packed_weights_are_not_expanded():
     assert converted[1][1] is down
     assert converted[0][1].shape == (2, 8, 6)
     assert converted[1][1].shape == (2, 3, 8)
+
+
+def test_glm5_next_runtime_names_are_reverted_to_checkpoint_names():
+    weights = [
+        ("model.layers.0.attn_hc.fn", torch.tensor([1.0])),
+        ("model.layers.0.attn_hc.base", torch.tensor([2.0])),
+        ("model.layers.0.attn_hc.scale", torch.tensor([3.0])),
+        ("model.layers.0.ffn_hc.fn", torch.tensor([4.0])),
+        ("model.layers.0.ffn_hc.base", torch.tensor([5.0])),
+        ("model.layers.0.ffn_hc.scale", torch.tensor([6.0])),
+        ("model.layers.0.self_attn.forget_gate.f_a_proj.weight", torch.tensor([7.0])),
+        ("model.layers.0.self_attn.forget_gate.f_b_proj.weight", torch.tensor([8.0])),
+        ("model.layers.0.self_attn.forget_gate.dt_bias", torch.tensor([9.0])),
+        ("model.layers.0.self_attn.forget_gate.A_log", torch.tensor([10.0])),
+    ]
+
+    converted = _collect(weights, "glm5_next")
+
+    assert [name for name, _ in converted] == [
+        "model.layers.0.hc_attn_fn",
+        "model.layers.0.hc_attn_base",
+        "model.layers.0.hc_attn_scale",
+        "model.layers.0.hc_ffn_fn",
+        "model.layers.0.hc_ffn_base",
+        "model.layers.0.hc_ffn_scale",
+        "model.layers.0.self_attn.f_a_proj.weight",
+        "model.layers.0.self_attn.f_b_proj.weight",
+        "model.layers.0.self_attn.dt_bias",
+        "model.layers.0.self_attn.A_log",
+    ]
+    for (_, actual), (_, expected) in zip(converted, weights, strict=True):
+        assert actual is expected
+
+
+def test_glm5_next_fused_conv1d_is_split_without_cross_channel_mixing():
+    fused = torch.arange(3 * 4 * 2, dtype=torch.float32).reshape(12, 1, 2)
+
+    converted = _collect(
+        [("model.layers.0.self_attn.conv1d.weight", fused)],
+        "glm5_next_text",
+    )
+
+    assert [name for name, _ in converted] == [
+        "model.layers.0.self_attn.q_conv1d.weight",
+        "model.layers.0.self_attn.k_conv1d.weight",
+        "model.layers.0.self_attn.v_conv1d.weight",
+    ]
+    for index, (_, tensor) in enumerate(converted):
+        torch.testing.assert_close(tensor, fused[index * 4 : (index + 1) * 4])
+        assert tensor.is_contiguous()
+
+
+def test_glm5_next_fused_conv1d_rejects_invalid_channel_count():
+    fused = torch.zeros(10, 1, 2)
+
+    try:
+        _collect([("model.layers.0.self_attn.conv1d.weight", fused)], "glm5_next")
+    except ValueError as error:
+        assert "Invalid GLM-5.3 fused conv1d shape" in str(error)
+    else:
+        raise AssertionError("Invalid GLM-5.3 fused conv1d shape was accepted")

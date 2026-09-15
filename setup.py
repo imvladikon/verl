@@ -38,12 +38,26 @@ install_requires = [
     "ray[default]>=2.41.0",
     "torchdata",
     "tensordict>=0.8.0,<=0.10.0,!=0.9.0",
+    # Imported unconditionally by core trainer paths. Keep the setuptools
+    # fallback aligned with the verl-core dependency in pyproject.toml.
+    "TransferQueue @ git+https://github.com/Ascend/TransferQueue.git@main",
     # 5.6.0 ships a broken flash-attention path (crashes on s_aux=None for
-    # sink-less models); fixed in 5.6.1. See huggingface/transformers#45588.
-    "transformers>=5.5.3,!=5.6.0,<5.11",
+    # sink-less models); fixed in 5.6.1. The GLM-5.3-Flash runtime is qualified
+    # on 5.16.1. See huggingface/transformers#45588.
+    "transformers>=5.5.3,!=5.6.0,<=5.16.1",
     "wandb",
     "packaging>=20.0",
     "tensorboard",
+    "fastapi",
+    "uvicorn",
+    "mathruler",
+    "qwen_vl_utils",
+    "torchcodec",
+    "cachetools",
+    "nvtx",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-rerunfailures",
 ]
 
 TEST_REQUIRES = ["pytest", "pre-commit", "py-spy", "pytest-asyncio", "pytest-rerunfailures"]
