@@ -70,6 +70,24 @@ def print_assembled_message(tokenizer, message_list, input_ids, loss_mask, attn_
     logger.debug(str)
 
 
+def processor_for_full_conversation(processor, columns, media_keys):
+    """The processor to keep when tokenizing the canonical full chat.
+
+    The restriction is about media in the data, not about the model being multimodal: a text-only
+    set trained on a multimodal checkpoint (GLM-5.3 ships a processor) renders through the
+    tokenizer alone, while media tensors cannot be aligned by prefix differencing.
+    """
+    if processor is None:
+        return None
+    present = [key for key in media_keys if key in columns]
+    if present:
+        raise ValueError(
+            "tokenize_full_conversation cannot align media tensors; this dataset carries "
+            f"{', '.join(present)}. Drop the media columns or use per-turn tokenization."
+        )
+    return None
+
+
 class MultiTurnSFTDataset(Dataset):
     """
     Dataset for multi-turn conversations where each assistant response should be trained
@@ -121,12 +139,6 @@ class MultiTurnSFTDataset(Dataset):
         self.stop_token_id = config.get("stop_token_id", None)
         assert self.truncation in ["error", "left", "right"]
 
-        if self.tokenize_full_conversation and processor is not None:
-            raise ValueError(
-                "tokenize_full_conversation currently supports text-only tokenizers; "
-                "multimodal processors require aligned media tensors"
-            )
-
         if not isinstance(parquet_files, list | ListConfig):
             parquet_files = [parquet_files]
 
@@ -140,6 +152,11 @@ class MultiTurnSFTDataset(Dataset):
 
         self._download()
         self._read_files_and_process()
+
+        if self.tokenize_full_conversation:
+            self.processor = processor_for_full_conversation(
+                self.processor, list(self.dataframe.columns), (self.image_key, self.video_key)
+            )
 
     def _download(self):
         for i, parquet_file in enumerate(self.parquet_files):

@@ -29,6 +29,11 @@ def _dataset(append_stop_token, stop_token_id=None, eos_token_id=7):
     return dataset
 
 
+def _fake_processor():
+    """Only the attributes the dataset reads during construction."""
+    return SimpleNamespace(image_processor=SimpleNamespace(patch_size=14))
+
+
 def _sample():
     return (
         torch.tensor([1, 2, 3, 4]),
@@ -68,3 +73,24 @@ def test_a_tokenizer_without_eos_is_an_error_rather_than_a_silent_skip():
     dataset.stop_token_id = None
     with pytest.raises(ValueError, match="no eos_token_id"):
         dataset._append_stop_token(*_sample())
+
+
+def test_a_text_only_set_keeps_full_conversation_on_a_multimodal_checkpoint():
+    """GLM-5.3 ships a processor; refusing every such checkpoint would rule out text-only SFT."""
+    from verl.utils.dataset.multiturn_sft_dataset import processor_for_full_conversation
+
+    kept = processor_for_full_conversation(_fake_processor(), ["messages", "n_tokens"], ("images", "videos"))
+    assert kept is None, "a text-only set falls back to tokenizer-only rendering"
+
+
+def test_media_columns_are_still_refused():
+    from verl.utils.dataset.multiturn_sft_dataset import processor_for_full_conversation
+
+    with pytest.raises(ValueError, match="cannot align media tensors"):
+        processor_for_full_conversation(_fake_processor(), ["messages", "images"], ("images", "videos"))
+
+
+def test_a_text_only_tokenizer_needs_no_decision():
+    from verl.utils.dataset.multiturn_sft_dataset import processor_for_full_conversation
+
+    assert processor_for_full_conversation(None, ["messages", "images"], ("images", "videos")) is None
