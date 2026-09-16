@@ -534,8 +534,70 @@ def _check_processor(args) -> Result:
 
 
 # --------------------------------------------------------------------------------------
-# kernels (opt-in, needs a GPU)
+# kernels (needs a GPU; the probes that run a kernel are opt-in behind --kernels, the binding
+# check is not: it only reads which implementation was selected, and that is what gates a run)
 # --------------------------------------------------------------------------------------
+
+
+_FUSED_KERNEL_FUNCTIONS = (
+    "chunk_kimi_delta_attention",
+    "recurrent_kimi_delta_attention",
+    "causal_conv1d_fn",
+    "causal_conv1d_update",
+)
+
+
+def bound_kernel_implementation(function) -> tuple[bool, str]:
+    """Report which implementation a transformers kernel wrapper actually closed over.
+
+    ``use_kernel_func_from_hub_with_fallback`` resolves the implementation once, at import time,
+    inside a ``try/except Exception`` (``transformers/integrations/hub_kernels.py``). A package that
+    is installed but fails to bind therefore leaves the torch reference in place, raises nothing,
+    and says so only in a log line nobody reads: the run is simply slow. The decision survives in
+    the wrapper's closure, which is the only place it can be read back.
+
+    Returns whether a fused implementation was bound, and the module it came from.
+    """
+    variables = inspect.getclosurevars(function).nonlocals
+    implementation = variables.get("implementation")
+    return bool(variables.get("is_new_implementation")), getattr(implementation, "__module__", "?")
+
+
+@registry.add("kernels", "glm5_next fused kernel bindings")
+def _check_kernel_bindings(args) -> Result:
+    """Fail when the KDA and conv1d paths silently fell back to the torch reference."""
+    name = "glm5_next fused kernel bindings"
+    torch = _module("torch")
+    if torch is None or not torch.cuda.is_available():
+        return Result(name, SKIP, "no CUDA device, so the fused kernels would not be used anyway")
+    modeling = _module("transformers.models.glm5_next.modeling_glm5_next")
+    if modeling is None:
+        reason = _why("transformers.models.glm5_next.modeling_glm5_next")
+        return Result(name, FAIL, f"glm5_next modeling not importable{reason}")
+
+    fused: list[str] = []
+    fell_back: list[str] = []
+    for function_name in _FUSED_KERNEL_FUNCTIONS:
+        function = getattr(modeling, function_name, None)
+        if function is None:
+            fell_back.append(f"{function_name}: absent from the modeling module")
+            continue
+        try:
+            is_fused, where = bound_kernel_implementation(function)
+        except Exception as error:
+            fell_back.append(f"{function_name}: {_describe_error(error)[:80]}")
+            continue
+        (fused if is_fused else fell_back).append(f"{function_name} <- {where}")
+
+    if fell_back:
+        return Result(
+            name,
+            FAIL,
+            "torch reference bound for: " + "; ".join(fell_back) + (f" | fused: {', '.join(fused)}" if fused else ""),
+            "install flash-linear-attention and causal_conv1d in the image; on a build that is "
+            "meant to run the reference path, pass --allow-fail 'fused kernel bindings'",
+        )
+    return Result(name, PASS, "; ".join(fused))
 
 
 @registry.add("kernels", "load_inline (C++ extension build)")

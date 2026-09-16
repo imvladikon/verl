@@ -89,6 +89,31 @@ def test_groups_can_be_selected(group):
     assert results, f"group {group} ran no checks"
 
 
+def _kernel_wrapper(implementation, is_new_implementation):
+    """A stand-in with the same closure shape transformers' kernel decorator produces."""
+
+    def wrapped(*args, **kwargs):
+        return implementation(*args, **kwargs) if is_new_implementation else None
+
+    return wrapped
+
+
+def test_bound_kernel_implementation_reads_the_selected_implementation():
+    import math
+
+    assert preflight.bound_kernel_implementation(_kernel_wrapper(math.fsum, True)) == (True, "math")
+    # The fallback case is the one that matters: nothing raised, the torch reference stayed.
+    assert preflight.bound_kernel_implementation(_kernel_wrapper(len, False)) == (False, "builtins")
+
+
+def test_kernel_binding_check_skips_without_cuda(monkeypatch):
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    results = {r.name: r for r in preflight.run(_args(group=["kernels"]))}
+    assert results["glm5_next fused kernel bindings"].status == preflight.SKIP
+
+
 def test_allow_fail_downgrades_a_failure_without_hiding_it(monkeypatch):
     def failing(_args):
         return preflight.Result("megatron raw-MLP recompute", preflight.FAIL, "fix missing")
