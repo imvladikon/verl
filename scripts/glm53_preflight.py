@@ -44,8 +44,15 @@ PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
 SKIP = "SKIP"
+ALLOWED = "ALLOWED"  # failed, but --allow-fail says this build is expected to fail it
 
-_MARK = {PASS: "[ ok ]", WARN: "[warn]", FAIL: "[FAIL]", SKIP: "[skip]"}
+_MARK = {
+    PASS: "[ ok ]",
+    WARN: "[warn]",
+    FAIL: "[FAIL]",
+    SKIP: "[skip]",
+    ALLOWED: "[fail*]",
+}
 
 
 @dataclass
@@ -735,6 +742,10 @@ def _model_text_config(model_path: str) -> str:
 # --------------------------------------------------------------------------------------
 
 
+def _is_allowed_to_fail(name: str, patterns) -> bool:
+    return any(pattern.lower() in name.lower() for pattern in patterns or ())
+
+
 def run(args: argparse.Namespace) -> list[Result]:
     results = []
     current_group = None
@@ -745,6 +756,10 @@ def run(args: argparse.Namespace) -> list[Result]:
             result = check(args)
         except Exception as error:  # a check must never take the launcher down
             result = Result(name, FAIL, f"check raised {_describe_error(error)}")
+        # A transition image is knowingly missing some fixes; those checks still run and still
+        # print, they just must not gate the launch.
+        if result.status == FAIL and _is_allowed_to_fail(result.name, getattr(args, "allow_fail", None)):
+            result = Result(result.name, ALLOWED, result.detail, result.hint)
         results.append(result)
         if not args.json:
             if group != current_group:
@@ -762,21 +777,32 @@ def main() -> int:
     parser.add_argument("--kernels", action="store_true", help="run the GPU kernel probes (slower)")
     parser.add_argument("--attention-backend", help="attention backend the run would pass to sglang")
     parser.add_argument("--group", action="append", help="only run these groups (repeatable)")
+    parser.add_argument(
+        "--allow-fail",
+        action="append",
+        metavar="PATTERN",
+        help="a failure whose check name contains PATTERN is reported as [fail*] and does not set "
+        "the exit code (repeatable); for a transition image that knowingly lacks some fixes",
+    )
     parser.add_argument("--json", action="store_true", help="print results as JSON")
     args = parser.parse_args()
 
     results = run(args)
     failures = [r for r in results if r.status == FAIL]
     warnings = [r for r in results if r.status == WARN]
+    allowed = [r for r in results if r.status == ALLOWED]
     if args.json:
         print(json.dumps([r.__dict__ for r in results], indent=2))
     else:
         print(
-            f"\n{len(results)} checks: {len(results) - len(failures) - len(warnings)} ok, "
+            f"\n{len(results)} checks: {len(results) - len(failures) - len(warnings) - len(allowed)} ok, "
             f"{len(warnings)} warnings, {len(failures)} failed"
+            + (f", {len(allowed)} failed but allowed" if allowed else "")
         )
         for result in failures:
             print(f"  FAIL {result.name}: {result.detail}")
+        for result in allowed:
+            print(f"  allowed to fail: {result.name}")
     return 1 if failures else 0
 
 

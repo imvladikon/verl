@@ -36,7 +36,7 @@ preflight = _load()
 
 
 def _args(**kw):
-    defaults = dict(model=None, kernels=False, attention_backend=None, group=None, json=True)
+    defaults = dict(model=None, kernels=False, attention_backend=None, group=None, json=True, allow_fail=None)
     defaults.update(kw)
     return argparse.Namespace(**defaults)
 
@@ -87,3 +87,21 @@ def test_json_output_is_machine_readable(capsys):
 def test_groups_can_be_selected(group):
     results = preflight.run(_args(group=[group]))
     assert results, f"group {group} ran no checks"
+
+
+def test_allow_fail_downgrades_a_failure_without_hiding_it(monkeypatch):
+    def failing(_args):
+        return preflight.Result("megatron raw-MLP recompute", preflight.FAIL, "fix missing")
+
+    monkeypatch.setattr(preflight, "registry", preflight.Registry())
+    preflight.registry.add("fork fixes", "megatron raw-MLP recompute")(failing)
+
+    (gated,) = preflight.run(_args())
+    assert gated.status == preflight.FAIL
+
+    (allowed,) = preflight.run(_args(allow_fail=["megatron"]))
+    assert allowed.status == preflight.ALLOWED
+    assert allowed.detail == "fix missing"
+
+    (unrelated,) = preflight.run(_args(allow_fail=["sglang"]))
+    assert unrelated.status == preflight.FAIL
