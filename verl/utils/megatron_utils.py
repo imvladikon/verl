@@ -16,7 +16,6 @@
 # limitations under the License.
 """Pretrain utilities."""
 
-import gc
 import inspect
 import logging
 import os
@@ -812,7 +811,6 @@ def offload_megatron_model_to_cpu(models):
         if cleared:
             logger.debug("Cleared %d TE FP8 weight workspaces on offload", cleared)
 
-    gc.collect()
     get_torch_device().empty_cache()
 
 
@@ -860,7 +858,6 @@ def load_megatron_model_to_gpu(models, load_grad=True, load_frozen_params=True):
                 param.data = param.data.to(device_id, non_blocking=True)
                 if param.grad is not None:
                     param.grad = param.grad.to(device_id, non_blocking=True)
-    gc.collect()
     get_torch_device().empty_cache()
 
 
@@ -992,7 +989,6 @@ def offload_megatron_optimizer(optimizers):
         # Free Megatron-LM's global memory buffer
         get_global_memory_buffer().buffer.clear()
 
-        gc.collect()
         get_torch_device().empty_cache()
 
 
@@ -1021,7 +1017,6 @@ def load_megatron_optimizer(optimizers):
                     # "master_param" when use_precision_aware_optimizer=True.
                     if "master_param" in v:
                         v["master_param"] = v["master_param"].to(get_device_id(), non_blocking=True)
-        gc.collect()
         get_torch_device().empty_cache()
 
 

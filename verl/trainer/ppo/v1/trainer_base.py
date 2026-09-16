@@ -1018,12 +1018,25 @@ class PPOTrainer(ABC):
         submitted_prompts = 0
         returned_prompts = 0
         returned_sessions = 0
+        # To avoid failure sessions
+        expected_acc_counts: dict[tuple[str, str], int] = {}
 
         for batch_dict in self.val_dataloader:
             # 1. put batch to agent loop manager
             batch_dict["uid"] = np.array(
                 [str(uuid.uuid4()) for _ in range(len(batch_dict["raw_prompt"]))], dtype=object
             )
+            batch_size = len(batch_dict["uid"])
+            batch_data_sources = batch_dict.get("data_source", ["unknown"] * batch_size)
+            batch_rollout_ns = batch_dict.get(
+                "__rollout_n__", [self.config.actor_rollout_ref.rollout.val_kwargs.n] * batch_size
+            )
+            for uid, data_source, rollout_n in zip(
+                batch_dict["uid"], batch_data_sources, batch_rollout_ns, strict=True
+            ):
+                rollout_n = int(rollout_n)
+                expected_acc_counts[(str(data_source), str(uid))] = rollout_n
+
             batch = tu.get_tensordict(batch_dict)
             tu.assign_non_tensor_data(batch, "global_steps", self.global_steps)
             tu.assign_non_tensor_data(batch, "validate", True)
@@ -1168,9 +1181,16 @@ class PPOTrainer(ABC):
                 dump_path=val_data_dir,
             )
 
-        metric_dict = self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        metric_dict = self._val_metrics_update(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            sample_turns,
+            expected_acc_counts=expected_acc_counts,
+        )
         failed_prompts = submitted_prompts - returned_prompts
-        expected_sessions = submitted_prompts * self.config.actor_rollout_ref.rollout.val_kwargs.n
+        # Per-prompt __rollout_n__ overrides val_kwargs.n, so the expected counts are the authority.
+        expected_sessions = sum(expected_acc_counts.values())
         failed_sessions = max(expected_sessions - returned_sessions, 0)
         metric_dict["val-aux/failed_prompts"] = failed_prompts
         metric_dict["val-aux/failed_sessions"] = failed_sessions
@@ -1319,8 +1339,20 @@ class PPOTrainer(ABC):
                 dump_path=rollout_data_dir,
             )
 
-    def _val_metrics_update(self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns) -> dict[str, float]:
-        data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
+    def _val_metrics_update(
+        self,
+        data_sources,
+        sample_uids,
+        reward_extra_infos_dict,
+        sample_turns,
+        expected_acc_counts: dict[tuple[str, str], int] | None = None,
+    ) -> dict[str, float]:
+        data_src2var2metric2val = process_validation_metrics(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            expected_acc_counts=expected_acc_counts,
+        )
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
             core_var = "acc" if "acc" in var2metric2val else "reward"
