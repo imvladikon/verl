@@ -547,7 +547,7 @@ _FUSED_KERNEL_FUNCTIONS = (
 )
 
 
-def bound_kernel_implementation(function) -> tuple[bool, str]:
+def bound_kernel_implementation(function) -> tuple[str, str]:
     """Report which implementation a transformers kernel wrapper actually closed over.
 
     ``use_kernel_func_from_hub_with_fallback`` resolves the implementation once, at import time,
@@ -556,11 +556,30 @@ def bound_kernel_implementation(function) -> tuple[bool, str]:
     and says so only in a log line nobody reads: the run is simply slow. The decision survives in
     the wrapper's closure, which is the only place it can be read back.
 
-    Returns whether a fused implementation was bound, and the module it came from.
+    With the ``kernels`` hub library installed the wrapper is an ``nn.Module`` whose ``forward``
+    closes over the function instead, so unwrap that first.
+
+    Returns ``("fused" | "torch" | "unknown", module or reason)``. "unknown" is kept distinct from
+    "torch" on purpose: failing a run because this function could not introspect a wrapper is a
+    different problem from failing it because the kernels really are the slow reference.
     """
-    variables = inspect.getclosurevars(function).nonlocals
+    resolved = function
+    for _ in range(3):
+        forward = getattr(type(resolved), "forward", None)
+        if not inspect.isfunction(forward):
+            break
+        inner = inspect.getclosurevars(forward).nonlocals.get("func")
+        if inner is None:
+            break
+        resolved = inner
+    if not inspect.isfunction(resolved):
+        return "unknown", f"{type(function).__name__} exposes no readable closure"
+    variables = inspect.getclosurevars(resolved).nonlocals
+    if "is_new_implementation" not in variables:
+        return "unknown", "not wrapped by the transformers kernel selector"
     implementation = variables.get("implementation")
-    return bool(variables.get("is_new_implementation")), getattr(implementation, "__module__", "?")
+    where = getattr(implementation, "__module__", "?")
+    return ("fused" if variables["is_new_implementation"] else "torch"), where
 
 
 @registry.add("kernels", "glm5_next fused kernel bindings")
@@ -577,27 +596,42 @@ def _check_kernel_bindings(args) -> Result:
 
     fused: list[str] = []
     fell_back: list[str] = []
+    undetermined: list[str] = []
     for function_name in _FUSED_KERNEL_FUNCTIONS:
         function = getattr(modeling, function_name, None)
         if function is None:
-            fell_back.append(f"{function_name}: absent from the modeling module")
+            undetermined.append(f"{function_name}: absent from the modeling module")
             continue
+        # The hub wrapper carries the kernel's own name, which is what the logs call it.
+        label = getattr(function, "kernel_layer_name", None) or function_name
         try:
-            is_fused, where = bound_kernel_implementation(function)
+            state, where = bound_kernel_implementation(function)
         except Exception as error:
-            fell_back.append(f"{function_name}: {_describe_error(error)[:80]}")
+            undetermined.append(f"{label}: {_describe_error(error)[:80]}")
             continue
-        (fused if is_fused else fell_back).append(f"{function_name} <- {where}")
+        {"fused": fused, "torch": fell_back}.get(state, undetermined).append(f"{label} <- {where}")
 
+    summary = " | ".join(
+        part
+        for part in (
+            f"torch reference: {', '.join(fell_back)}" if fell_back else "",
+            f"fused: {', '.join(fused)}" if fused else "",
+            f"undetermined: {', '.join(undetermined)}" if undetermined else "",
+        )
+        if part
+    )
     if fell_back:
         return Result(
             name,
             FAIL,
-            "torch reference bound for: " + "; ".join(fell_back) + (f" | fused: {', '.join(fused)}" if fused else ""),
-            "install flash-linear-attention and causal_conv1d in the image; on a build that is "
-            "meant to run the reference path, pass --allow-fail 'fused kernel bindings'",
+            summary,
+            "install the missing package in the image (flash-linear-attention for the KDA kernels, "
+            "causal_conv1d for the conv1d ones); on a build meant to run the reference path, pass "
+            "--allow-fail 'fused kernel bindings'",
         )
-    return Result(name, PASS, "; ".join(fused))
+    if undetermined:
+        return Result(name, WARN, summary, "the wrapper shape changed; this check needs updating")
+    return Result(name, PASS, summary)
 
 
 @registry.add("kernels", "load_inline (C++ extension build)")

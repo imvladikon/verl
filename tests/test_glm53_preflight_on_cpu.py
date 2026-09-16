@@ -101,9 +101,32 @@ def _kernel_wrapper(implementation, is_new_implementation):
 def test_bound_kernel_implementation_reads_the_selected_implementation():
     import math
 
-    assert preflight.bound_kernel_implementation(_kernel_wrapper(math.fsum, True)) == (True, "math")
+    assert preflight.bound_kernel_implementation(_kernel_wrapper(math.fsum, True)) == ("fused", "math")
     # The fallback case is the one that matters: nothing raised, the torch reference stayed.
-    assert preflight.bound_kernel_implementation(_kernel_wrapper(len, False)) == (False, "builtins")
+    assert preflight.bound_kernel_implementation(_kernel_wrapper(len, False)) == ("torch", "builtins")
+
+
+def _hub_func_module(func):
+    """The shape `kernels.layer` builds: a module whose forward closes over `func`."""
+
+    class Func:
+        def forward(self, *args, **kwargs):
+            return func(*args, **kwargs)
+
+    return Func()
+
+
+def test_bound_kernel_implementation_unwraps_a_kernels_hub_module():
+    import math
+
+    wrapped = _hub_func_module(_kernel_wrapper(math.fsum, True))
+    assert preflight.bound_kernel_implementation(wrapped) == ("fused", "math")
+
+
+def test_bound_kernel_implementation_reports_an_unreadable_wrapper_as_unknown():
+    state, reason = preflight.bound_kernel_implementation(lambda: None)
+    assert state == "unknown", "an unrecognised wrapper must not be reported as a torch fallback"
+    assert reason
 
 
 def test_kernel_binding_check_skips_without_cuda(monkeypatch):
