@@ -5332,7 +5332,7 @@ wheels = [
 
 [[package]]
 name = "sgl-deep-gemm"
-version = "0.1.7"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -5342,14 +5342,14 @@ dependencies = [
     { name = "apache-tvm-ffi", version = "0.1.11", source = { registry = "https://pypi.org/simple" } },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e2/81/204823503054b3cee5bc8070dd5011cc7df2ce9af53d6c765b967b59efa9/sgl_deep_gemm-0.1.7-py3-none-manylinux2014_aarch64.whl", hash = "sha256:9549a3d1c2028ca5b71c1ad91a66c74a1ef2a93ec014a8d1378ce157a8bb1d30", size = 4722348, upload-time = "2026-08-31T11:39:16.545Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/ad/6f9aa43796dc2f028cbe62b43c276dbce8091b955eb918d42a147d97b377/sgl_deep_gemm-0.1.7-py3-none-manylinux2014_x86_64.whl", hash = "sha256:f4e67086dc685ddcfcbb7833cc9770afd850cab23e173e77b9b18c19de0c2836", size = 4877609, upload-time = "2026-08-31T11:39:18.146Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/82/a915cd9094cade963c61dff0e92fbd38a873f7662ab3c213f8477c039cee/sgl_deep_gemm-0.2.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:66c0f28bed4ccbbf61d10983c9dd053b638443110b940f73e4c0a4a104094e84", size = 5188348, upload-time = "2026-09-14T06:16:36.274Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/7e/f334fc133f1a710841b0d6ddf8d29148c6b367f32b270f8664529e622559/sgl_deep_gemm-0.2.0-py3-none-manylinux2014_x86_64.whl", hash = "sha256:f208c333fca6686b482abc1e2dbb1960cd73be92f632829dc46fd6f7e9b9fb4d", size = 5419649, upload-time = "2026-09-14T06:16:37.827Z" },
 ]
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev18476+g3b8bf7ed6"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#3b8bf7ed60a2c4c24cf4f65648e19c86be9c9dca" }
+version = "0.0.0.dev18578+g8b3168de7"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#8b3168de76fa9bb9eec89797b248fa7a03f63846" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -5408,7 +5408,7 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "setproctitle" },
     { name = "sgl-deep-ep" },
-    { name = "sgl-deep-gemm", version = "0.1.7", source = { registry = "https://pypi.org/simple" } },
+    { name = "sgl-deep-gemm", version = "0.2.0", source = { registry = "https://pypi.org/simple" } },
     { name = "sglang-kernel", version = "0.4.7", source = { registry = "https://pypi.org/simple" } },
     { name = "smg-grpc-servicer" },
     { name = "soundfile" },
@@ -6881,7 +6881,7 @@ glm = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev18476+g3b8bf7ed6", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#3b8bf7ed60a2c4c24cf4f65648e19c86be9c9dca" } },
+    { name = "sglang", version = "0.0.0.dev18578+g8b3168de7", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#8b3168de76fa9bb9eec89797b248fa7a03f63846" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
