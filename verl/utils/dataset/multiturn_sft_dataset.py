@@ -115,6 +115,10 @@ class MultiTurnSFTDataset(Dataset):
         self.max_samples = max_samples
         self.ignore_input_ids_mismatch = config.get("ignore_input_ids_mismatch", False)
         self.tokenize_full_conversation = config.get("tokenize_full_conversation", False)
+        # Templates differ on whether an assistant turn ends with a stop token; when it does not,
+        # the answer's last supervised token is ordinary text and the model never learns to stop.
+        self.append_stop_token = config.get("append_stop_token", False)
+        self.stop_token_id = config.get("stop_token_id", None)
         assert self.truncation in ["error", "left", "right"]
 
         if self.tokenize_full_conversation and processor is not None:
@@ -130,6 +134,8 @@ class MultiTurnSFTDataset(Dataset):
         if isinstance(tokenizer, str):
             tokenizer = hf_tokenizer(tokenizer)
         self.tokenizer: PreTrainedTokenizer = tokenizer
+        if self.stop_token_id is None:
+            self.stop_token_id = getattr(self.tokenizer, "eos_token_id", None)
         self.processor = processor
 
         self._download()
@@ -306,6 +312,31 @@ class MultiTurnSFTDataset(Dataset):
 
         if not bool(loss_mask.any()):
             raise ValueError("conversation has no supervised assistant tokens")
+
+        input_ids, loss_mask, attention_mask = self._append_stop_token(input_ids, loss_mask, attention_mask)
+        return input_ids, loss_mask, attention_mask
+
+    def _append_stop_token(self, input_ids: torch.Tensor, loss_mask: torch.Tensor, attention_mask: torch.Tensor):
+        """Supervise the token that ends generation, when the template does not emit one.
+
+        A template that closes an assistant turn with nothing (GLM-5.3 renders the answer text and
+        stops) leaves a target whose last token is ordinary text. Trained on that, the model never
+        learns to stop and generation runs to the length cap. The id is the tokenizer's own eos,
+        which is also what the inference engine stops on.
+        """
+        if not self.append_stop_token:
+            return input_ids, loss_mask, attention_mask
+        stop_id = self.stop_token_id
+        if stop_id is None:
+            raise ValueError(
+                "data.append_stop_token is set but the tokenizer has no eos_token_id; set data.stop_token_id explicitly"
+            )
+        if int(input_ids[-1]) == int(stop_id):
+            return input_ids, loss_mask, attention_mask
+        tail = torch.tensor([stop_id], dtype=input_ids.dtype)
+        input_ids = torch.cat([input_ids, tail])
+        loss_mask = torch.cat([loss_mask, torch.ones(1, dtype=loss_mask.dtype)])
+        attention_mask = torch.cat([attention_mask, torch.ones(1, dtype=attention_mask.dtype)])
         return input_ids, loss_mask, attention_mask
 
     def _build_messages(self, example: dict):

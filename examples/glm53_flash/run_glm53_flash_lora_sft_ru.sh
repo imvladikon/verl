@@ -78,6 +78,7 @@ mkdir -p "${output_dir}"
   data.max_length="${max_length}" \
   data.truncation=error \
   data.tokenize_full_conversation=true \
+  data.append_stop_token=true \
   data.messages_key=messages \
   data.num_workers=4 \
   model.path="${model_path}" \
