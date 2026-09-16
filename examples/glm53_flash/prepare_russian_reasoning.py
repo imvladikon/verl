@@ -138,6 +138,10 @@ def main() -> int:
                 too_long += 1
                 continue
             lengths.append(token_count)
+            # Carried in the output so a smaller budget can be selected later without tokenizing
+            # 147k conversations again.
+            kept.append({"messages": messages, "n_tokens": token_count})
+            continue
         kept.append({"messages": messages})
 
     if not kept:
