@@ -5348,8 +5348,8 @@ wheels = [
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev18474+g206619d2e"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#206619d2eb159a3d1e672a6243f1a37334166578" }
+version = "0.0.0.dev18475+gfbf9789fc"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#fbf9789fcab1a58d6a873e5e5cd07a405849dead" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -6881,7 +6881,7 @@ glm = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev18474+g206619d2e", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#206619d2eb159a3d1e672a6243f1a37334166578" } },
+    { name = "sglang", version = "0.0.0.dev18475+gfbf9789fc", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#fbf9789fcab1a58d6a873e5e5cd07a405849dead" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
