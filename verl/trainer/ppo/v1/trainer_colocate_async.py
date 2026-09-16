@@ -16,6 +16,27 @@ from verl.utils.debug import marked_timer
 from verl.workers.rollout.llm_server import FullyAsyncLLMServerClient
 
 
+def reject_unmerged_lora_adapter(config) -> None:
+    """Async rollout cannot unload a LoRA adapter while partial rollout keeps requests alive.
+
+    After on_sample_end aborts, the client immediately resubmits the aborted requests, so they sit
+    in the paused engine holding the adapter; the unload_lora_adapter inside the weight sync then
+    times out. Merged LoRA does not hit this: the rollout receives full weights and no adapter is
+    unloaded.
+    """
+    model = config.actor_rollout_ref.model
+    lora = model.get("lora", {}) or {}
+    rank = max(int(model.get("lora_rank", 0) or 0), int(lora.get("rank", 0) or 0))
+    if rank <= 0 or bool(lora.get("merge", False)):
+        return
+    raise ValueError(
+        "trainer_mode=colocate_async requires actor_rollout_ref.model.lora.merge=true when LoRA is "
+        f"enabled (rank={rank}). Serving the adapter separately deadlocks the weight sync: the "
+        "partial-rollout retries hold the adapter in the paused engine and unload_lora_adapter times "
+        "out. Use the merged path, or run trainer_mode=sync."
+    )
+
+
 @register_trainer("colocate_async")
 class PPOTrainerColocateAsync(PPOTrainer):
     """Asynchronous PPO trainer
@@ -28,6 +49,7 @@ class PPOTrainerColocateAsync(PPOTrainer):
         return self.llm_server_manager.get_client(client_cls=FullyAsyncLLMServerClient)
 
     def on_init_end(self):
+        reject_unmerged_lora_adapter(self.config)
         # update weights after loading checkpoint
         self.checkpoint_manager.update_weights(self.global_steps)
 
