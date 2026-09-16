@@ -2556,7 +2556,7 @@ wheels = [
 [[package]]
 name = "megatron-bridge"
 version = "0.5.2"
-source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#9a41cd0a5d27ad7f41d3126855c7f6f593fdc83d" }
+source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#c3c5e9c3a4a106b1e9a291e2c22c9ea571ae0f3c" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -2580,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "megatron-core"
 version = "0.18.0"
-source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" }
+source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -6865,8 +6865,8 @@ glm = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#9a41cd0a5d27ad7f41d3126855c7f6f593fdc83d" } },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" } },
+    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#c3c5e9c3a4a106b1e9a291e2c22c9ea571ae0f3c" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" } },
     { name = "numpy" },
     { name = "nvidia-modelopt" },
     { name = "nvtx" },
@@ -6906,7 +6906,7 @@ glm53-automodel = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#ab40dead1fabe7409934e36a8d4f25cd1cb4ab9a" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" } },
     { name = "nemo-automodel" },
     { name = "numpy" },
     { name = "nvtx" },
