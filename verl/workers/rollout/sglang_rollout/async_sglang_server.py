@@ -121,6 +121,23 @@ def uses_dsa_attention(hf_config: Any) -> bool:
     return any(getattr(config, "index_topk", None) is not None for config in (hf_config, text_config) if config)
 
 
+def apply_rollout_sampling_defaults(sampling_params: dict[str, Any], config: Any) -> None:
+    """Carry rollout-config sampling options SGLang only learns through this dict.
+
+    The agent loop builds sampling_params from temperature/top_p/top_k/logprobs only, so options
+    such as ignore_eos reached vLLM (which applies them in its own server) but never SGLang.
+    """
+    for field in ("ignore_eos", "min_new_tokens", "repetition_penalty"):
+        value = config.get(field, None) if hasattr(config, "get") else getattr(config, field, None)
+        if value is None:
+            continue
+        sampling_params.setdefault(field, value)
+    # min_new_tokens above the request's own budget makes SGLang reject the request.
+    max_new_tokens = sampling_params.get("max_new_tokens")
+    if max_new_tokens is not None and sampling_params.get("min_new_tokens"):
+        sampling_params["min_new_tokens"] = min(int(sampling_params["min_new_tokens"]), int(max_new_tokens))
+
+
 def _set_default_weights_cpu_backup(args: dict[str, Any], *, rollout_mode: RolloutMode, lora_rank: int) -> None:
     args.setdefault(
         "enable_weights_cpu_backup",
@@ -749,6 +766,7 @@ class SGLangHttpServer:
             f"max_new_tokens {max_new_tokens} exceeds available context space {max_possible_tokens}"
         )
         sampling_params["max_new_tokens"] = max_new_tokens
+        apply_rollout_sampling_defaults(sampling_params, self.config)
         return_logprob = sampling_params.pop("logprobs", False)
 
         # vLLM-style "prompt_logprobs=K" from the distillation teacher: request

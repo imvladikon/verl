@@ -99,6 +99,30 @@ def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["temperature"] = 0
 
 
+def validation_budget_metrics(scores, response_lengths, budget: int) -> dict[str, float]:
+    """Split a validation score into "did it finish" and "was it right when it finished".
+
+    A response cut off at the budget scores like a wrong one, so the blended mean moves when the
+    policy only changes how long it thinks. Reporting the two factors separately keeps a shift in
+    reasoning length from reading as a change in accuracy.
+    """
+    if not len(scores) or not len(response_lengths) or budget <= 0:
+        return {}
+    scores = np.asarray(scores, dtype=float)
+    lengths = np.asarray(response_lengths, dtype=float)
+    if len(scores) != len(lengths):
+        return {}
+    truncated = lengths >= budget
+    metrics = {
+        "val-aux/response_length/mean": float(lengths.mean()),
+        "val-aux/response_length/max": float(lengths.max()),
+        "val-aux/truncated_ratio": float(truncated.mean()),
+    }
+    if (~truncated).any():
+        metrics["val-aux/score_among_untruncated"] = float(scores[~truncated].mean())
+    return metrics
+
+
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
@@ -1009,6 +1033,7 @@ class PPOTrainer(ABC):
         sample_gts = []
         sample_scores = []
         sample_turns = []
+        sample_response_lengths = []
         data_sources = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
         dump_all_inputs: list[str] = []
@@ -1094,6 +1119,7 @@ class PPOTrainer(ABC):
             text_data = tq.kv_batch_get(
                 keys=batch.keys, partition_id=batch.partition_id, select_fields=["prompts", "responses"]
             )
+            response_token_counts = text_data["responses"].offsets().diff().tolist()
             text_data["prompts"] = text_data["prompts"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
             text_data["responses"] = text_data["responses"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
             all_inputs = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in text_data["prompts"]]
@@ -1108,6 +1134,7 @@ class PPOTrainer(ABC):
             scores = data["rm_scores"].sum(dim=1).tolist()
             sample_scores.extend(scores)
             sample_turns.extend(data.pop("num_turns").tolist())
+            sample_response_lengths.extend(response_token_counts[i] for i in final_indices)
             reward_extra_infos_dict["reward"].extend(scores)
 
             extra_fields_list = data.pop("extra_fields", None)
@@ -1187,6 +1214,13 @@ class PPOTrainer(ABC):
             reward_extra_infos_dict,
             sample_turns,
             expected_acc_counts=expected_acc_counts,
+        )
+        metric_dict.update(
+            validation_budget_metrics(
+                sample_scores,
+                sample_response_lengths,
+                int(self.config.actor_rollout_ref.rollout.response_length),
+            )
         )
         failed_prompts = submitted_prompts - returned_prompts
         # Per-prompt __rollout_n__ overrides val_kwargs.n, so the expected counts are the authority.
