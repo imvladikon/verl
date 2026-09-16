@@ -16,11 +16,21 @@
 import pytest
 from omegaconf import OmegaConf
 
-from verl.trainer.ppo.v1.trainer_colocate_async import reject_unmerged_lora_adapter
+from verl.trainer.ppo.v1.trainer_colocate_async import (
+    reject_unmerged_lora_adapter,
+    warn_about_stale_prefix_cache,
+)
 
 
-def _config(**model_fields):
-    return OmegaConf.create({"actor_rollout_ref": {"model": {"lora_rank": 0, "lora": {}, **model_fields}}})
+def _config(rollout=None, **model_fields):
+    return OmegaConf.create(
+        {
+            "actor_rollout_ref": {
+                "model": {"lora_rank": 0, "lora": {}, **model_fields},
+                "rollout": rollout or {},
+            }
+        }
+    )
 
 
 def test_unmerged_adapter_is_rejected_with_the_reason():
@@ -34,3 +44,16 @@ def test_merged_lora_and_full_finetuning_are_allowed():
     reject_unmerged_lora_adapter(_config(lora_rank=16, lora={"merge": True}))
     reject_unmerged_lora_adapter(_config(lora={"rank": 8, "merge": True}))
     reject_unmerged_lora_adapter(_config())
+
+
+def test_enabled_radix_cache_is_warned_about(caplog):
+    with caplog.at_level("WARNING"):
+        warn_about_stale_prefix_cache(_config(rollout={"engine_kwargs": {"sglang": {}}}))
+    assert "disable_radix_cache" in caplog.text
+    assert "previous weights" in caplog.text
+
+
+def test_disabled_radix_cache_is_silent(caplog):
+    with caplog.at_level("WARNING"):
+        warn_about_stale_prefix_cache(_config(rollout={"engine_kwargs": {"sglang": {"disable_radix_cache": True}}}))
+    assert caplog.text == ""

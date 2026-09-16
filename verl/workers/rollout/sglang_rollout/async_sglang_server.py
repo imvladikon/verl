@@ -86,6 +86,10 @@ _REPORTED_SGLANG_BACKENDS = (
     "linear_attn_decode_backend",
     "moe_runner_backend",
     "disable_cuda_graph",
+    # Off for linear-attention models whatever the operator asked for, and worth seeing next to
+    # the rest rather than hunting for it in the scheduler's own log.
+    "disable_overlap_schedule",
+    "disable_radix_cache",
 )
 
 

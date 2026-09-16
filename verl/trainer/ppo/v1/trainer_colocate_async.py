@@ -11,9 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
+
 from verl.trainer.ppo.v1.trainer_base import PPOTrainer, register_trainer
 from verl.utils.debug import marked_timer
 from verl.workers.rollout.llm_server import FullyAsyncLLMServerClient
+
+logger = logging.getLogger(__name__)
 
 
 def reject_unmerged_lora_adapter(config) -> None:
@@ -37,6 +41,25 @@ def reject_unmerged_lora_adapter(config) -> None:
     )
 
 
+def warn_about_stale_prefix_cache(config) -> None:
+    """Partial rollout keeps the queue busy, so the post-sync cache flush never runs.
+
+    SGLang flushes only when the scheduler is fully idle; under partial rollout the aborted
+    requests are resubmitted immediately, so after every weight update the radix cache still holds
+    KV computed with the previous weights, and an unrelated request sharing a prefix reuses it.
+    """
+    engine_kwargs = (config.actor_rollout_ref.rollout.get("engine_kwargs", {}) or {}).get("sglang", {}) or {}
+    if engine_kwargs.get("disable_radix_cache", False):
+        return
+    logger.warning(
+        "colocate_async keeps the radix cache enabled: after each weight update it still holds KV "
+        "computed with the previous weights (the flush needs an idle scheduler, and partial-rollout "
+        "retries keep it busy), so requests sharing a prefix can reuse stale entries. Set "
+        "engine_kwargs.sglang.disable_radix_cache=true to rule that out, at the cost of recomputing "
+        "shared prefixes."
+    )
+
+
 @register_trainer("colocate_async")
 class PPOTrainerColocateAsync(PPOTrainer):
     """Asynchronous PPO trainer
@@ -50,6 +73,7 @@ class PPOTrainerColocateAsync(PPOTrainer):
 
     def on_init_end(self):
         reject_unmerged_lora_adapter(self.config)
+        warn_about_stale_prefix_cache(self.config)
         # update weights after loading checkpoint
         self.checkpoint_manager.update_weights(self.global_steps)
 
