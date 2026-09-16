@@ -15,6 +15,7 @@ import asyncio
 import functools
 import logging
 import os
+import time
 from contextlib import nullcontext
 from copy import deepcopy
 from functools import partial
@@ -787,11 +788,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         else:
             # vLLM: level-1 sleep still unmaps weights → must resume.
             resume_weights = self.config.rollout.free_cache_engine
+        resume_started = time.perf_counter()
         if resume_weights:
             await self.rollout.resume(tags=["weights"])
         log_gpu_memory_usage("After resume weights", logger=logger)
 
         # 2. determine if we need a base weight sync (adapter path only)
+        export_started = time.perf_counter()
         per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
             layered_summon=self.layered_summon, base_sync_done=True
         )
@@ -810,10 +813,21 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 per_tensor_param_base, peft_config=_base_peft_config, base_sync_done=False, global_steps=global_steps
             )
 
+        transfer_started = time.perf_counter()
         await self.rollout.update_weights(
             per_tensor_param, peft_config=peft_config, base_sync_done=True, global_steps=global_steps
         )
 
+        # The phases have different fixes, and only their split says which one to reach for.
+        # The Megatron->HF export is a generator, so its conversion cost lands in "send" together
+        # with the upload; "plan" is only what get_per_tensor_param does eagerly.
+        logger.info(
+            "update_weights phases: resume=%.1fs plan=%.1fs convert+send=%.1fs (adapter_only=%s)",
+            export_started - resume_started,
+            transfer_started - export_started,
+            time.perf_counter() - transfer_started,
+            bool(peft_config is not None and not self.peft_merge),
+        )
         log_gpu_memory_usage("After update_weights", logger=logger)
 
         # 3. offload model to cpu
