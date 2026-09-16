@@ -634,6 +634,57 @@ def _check_kernel_bindings(args) -> Result:
     return Result(name, PASS, summary)
 
 
+@registry.add("kernels", "megatron KDA kernel bindings")
+def _check_megatron_kda_bindings(args) -> Result:
+    """Report the kernels the Megatron actor will use, which are not the ones transformers picks.
+
+    The training actor is Megatron, and its KDA layer imports ``chunk_kda`` and ``causal_conv1d``
+    from ``fla`` directly rather than through the transformers kernel selector. Both imports sit
+    behind ``try/except ImportError`` that leaves the name as ``None``; the constructor then raises,
+    so this path cannot silently degrade the way the transformers one can -- but it can fail a job
+    after the weights are loaded, which preflight exists to prevent.
+    """
+    name = "megatron KDA kernel bindings"
+    common = _module("megatron.core.ssm.gated_delta_net.common")
+    kda = _module("megatron.core.ssm.gated_delta_net.kda")
+    if common is None or kda is None:
+        return Result(name, SKIP, "megatron gated_delta_net not importable (rollout-only node?)")
+
+    findings = []
+    missing = []
+    for module, attribute in ((common, "causal_conv1d"), (kda, "chunk_kda")):
+        value = getattr(module, attribute, None)
+        if value is None:
+            missing.append(attribute)
+        else:
+            findings.append(f"{attribute} <- {getattr(value, '__module__', '?')}")
+    if missing:
+        return Result(
+            name,
+            FAIL,
+            f"{', '.join(missing)} is None: " + ", ".join(findings or ["nothing bound"]),
+            "install flash-linear-attention with KDA support; the KDA layer raises ImportError at "
+            "construction, so the job would die after loading weights",
+        )
+
+    # Megatron calls fla's causal_conv1d without a backend argument, so fla's own default decides
+    # which kernel runs. 'cuda' would additionally need the separate causal_conv1d package.
+    backend = "?"
+    try:
+        backend = inspect.signature(common.causal_conv1d).parameters["backend"].default
+    except (TypeError, ValueError, KeyError):
+        pass
+    findings.append(f"conv1d backend={backend!r}")
+    if backend == "cuda" and _module("causal_conv1d") is None:
+        return Result(
+            name,
+            FAIL,
+            "; ".join(findings),
+            "fla defaults its conv1d to the cuda backend but the causal_conv1d package is absent",
+        )
+    return Result(name, PASS, "; ".join(findings))
+
+
 @registry.add("kernels", "load_inline (C++ extension build)")
 def _check_load_inline(args) -> Result:
     if not args.kernels:
