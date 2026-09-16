@@ -50,6 +50,14 @@ data:
   # Use this for contextual templates such as GLM-5.2 that cannot be composed turn by turn.
   tokenize_full_conversation: False
 
+  # Supervise a stop token at the end of the conversation (full-conversation tokenization only).
+  # Templates that close an assistant turn with nothing, such as GLM-5.3, otherwise leave a target
+  # ending in ordinary text, and the model never learns to stop generating.
+  append_stop_token: False
+
+  # Token id to append when append_stop_token is set; defaults to the tokenizer's eos_token_id.
+  stop_token_id: null
+
 # Checkpoint configuration
 checkpoint:
   _target_: verl.trainer.config.CheckpointConfig
