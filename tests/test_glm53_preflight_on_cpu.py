@@ -36,7 +36,9 @@ preflight = _load()
 
 
 def _args(**kw):
-    defaults = dict(model=None, kernels=False, attention_backend=None, group=None, json=True, allow_fail=None)
+    defaults = dict(
+        model=None, kernels=False, attention_backend=None, group=None, json=True, allow_fail=None, engine=None
+    )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
 
@@ -127,6 +129,20 @@ def test_bound_kernel_implementation_reports_an_unreadable_wrapper_as_unknown():
     state, reason = preflight.bound_kernel_implementation(lambda: None)
     assert state == "unknown", "an unrecognised wrapper must not be reported as a torch fallback"
     assert reason
+
+
+def test_severity_follows_the_engine_the_run_actually_uses():
+    # Without --engine both paths gate: safe, but it fails a run over bindings it never reaches.
+    assert preflight.severity_for_path(_args(), "fsdp") == preflight.FAIL
+    assert preflight.severity_for_path(_args(), "megatron") == preflight.FAIL
+
+    megatron_run = _args(engine="megatron")
+    assert preflight.severity_for_path(megatron_run, "megatron") == preflight.FAIL
+    assert preflight.severity_for_path(megatron_run, "fsdp") == preflight.WARN
+
+    fsdp_run = _args(engine="fsdp")
+    assert preflight.severity_for_path(fsdp_run, "fsdp") == preflight.FAIL
+    assert preflight.severity_for_path(fsdp_run, "megatron") == preflight.WARN
 
 
 def test_kernel_binding_check_skips_without_cuda(monkeypatch):

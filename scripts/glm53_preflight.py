@@ -23,8 +23,11 @@ Run it on the job's own node, with the job's own interpreter, before training::
     python scripts/glm53_preflight.py                       # environment + fork fixes
     python scripts/glm53_preflight.py --kernels             # also run the GPU kernels
     python scripts/glm53_preflight.py --model /path/to/hf   # also check a checkpoint
+    python scripts/glm53_preflight.py --engine megatron      # gate on the path this run takes
 
-Exit code is 1 when a check FAILs, so it can gate a launcher.
+Exit code is 1 when a check FAILs, so it can gate a launcher. Run it before the weights are
+fetched: every check here needs only the interpreter and a config, so a failure should cost
+seconds, not a checkpoint download.
 """
 
 from __future__ import annotations
@@ -539,6 +542,18 @@ def _check_processor(args) -> Result:
 # --------------------------------------------------------------------------------------
 
 
+def severity_for_path(args, path: str) -> str:
+    """How hard a kernel finding on ``path`` should bite, given the engine this run uses.
+
+    A binding on the path the run does not take says nothing about the run. Failing a Megatron job
+    over the transformers bindings is how people learn to blanket ``--allow-fail`` a check, and the
+    day it reports something real they will silence that too. Without ``--engine`` the engine is
+    unknown, so both paths stay gating.
+    """
+    engine = getattr(args, "engine", None)
+    return FAIL if engine in (None, path) else WARN
+
+
 _FUSED_KERNEL_FUNCTIONS = (
     "chunk_kimi_delta_attention",
     "recurrent_kimi_delta_attention",
@@ -621,9 +636,12 @@ def _check_kernel_bindings(args) -> Result:
         if part
     )
     if fell_back:
+        severity = severity_for_path(args, "fsdp")
+        if severity is WARN:
+            summary += " | not gating: --engine says this run does not take the transformers path"
         return Result(
             name,
-            FAIL,
+            severity,
             summary,
             "install the missing package in the image (flash-linear-attention for the KDA kernels, "
             "causal_conv1d for the conv1d ones); on a build meant to run the reference path, pass "
@@ -659,10 +677,14 @@ def _check_megatron_kda_bindings(args) -> Result:
         else:
             findings.append(f"{attribute} <- {getattr(value, '__module__', '?')}")
     if missing:
+        severity = severity_for_path(args, "megatron")
+        detail = f"{', '.join(missing)} is None: " + ", ".join(findings or ["nothing bound"])
+        if severity is WARN:
+            detail += " | not gating: --engine says this run does not take the megatron path"
         return Result(
             name,
-            FAIL,
-            f"{', '.join(missing)} is None: " + ", ".join(findings or ["nothing bound"]),
+            severity,
+            detail,
             "install flash-linear-attention with KDA support; the KDA layer raises ImportError at "
             "construction, so the job would die after loading weights",
         )
@@ -678,7 +700,7 @@ def _check_megatron_kda_bindings(args) -> Result:
     if backend == "cuda" and _module("causal_conv1d") is None:
         return Result(
             name,
-            FAIL,
+            severity_for_path(args, "megatron"),
             "; ".join(findings),
             "fla defaults its conv1d to the cuda backend but the causal_conv1d package is absent",
         )
@@ -922,6 +944,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", help="HF checkpoint directory to check and to resolve backends for")
     parser.add_argument("--kernels", action="store_true", help="run the GPU kernel probes (slower)")
+    parser.add_argument(
+        "--engine",
+        choices=("megatron", "fsdp"),
+        help="the engine this run uses; kernel findings on the other path then warn instead of "
+        "failing. Without it both paths gate, which is safe but fails a run over bindings it "
+        "never reaches.",
+    )
     parser.add_argument("--attention-backend", help="attention backend the run would pass to sglang")
     parser.add_argument("--group", action="append", help="only run these groups (repeatable)")
     parser.add_argument(
