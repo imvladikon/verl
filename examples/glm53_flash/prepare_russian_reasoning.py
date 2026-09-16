@@ -108,7 +108,16 @@ def main() -> int:
     parser.add_argument("--val-size", type=int, default=512)
     parser.add_argument("--limit", type=int, default=-1, help="stop after this many input rows")
     parser.add_argument("--system", default=None, help="system turn to prepend (default: none)")
+    parser.add_argument(
+        "--template-kwargs",
+        default=None,
+        help='JSON passed to apply_chat_template, e.g. \'{"template_variant": "flash"}\'. Must match '
+        "data.apply_chat_template_kwargs at training time, or the length filter here counts a "
+        "different rendering than the one that gets trained.",
+    )
     args = parser.parse_args()
+
+    template_kwargs = json.loads(args.template_kwargs) if args.template_kwargs else {}
 
     import pandas as pd
 
@@ -132,7 +141,7 @@ def main() -> int:
         if tokenizer is not None:
             # apply_chat_template(tokenize=True) can hand back a mapping rather than ids, so render
             # to text and tokenize that: the count has to be the real one, it decides what is kept.
-            text = tokenizer.apply_chat_template(messages, tokenize=False)
+            text = tokenizer.apply_chat_template(messages, tokenize=False, **template_kwargs)
             token_count = len(tokenizer(text, add_special_tokens=False)["input_ids"])
             if token_count > args.max_length:
                 too_long += 1
@@ -164,6 +173,7 @@ def main() -> int:
         "dropped_malformed": malformed,
         "dropped_too_long": too_long,
         "max_length": args.max_length if tokenizer else None,
+        "template_kwargs": template_kwargs,
     }
     if lengths:
         lengths.sort()
