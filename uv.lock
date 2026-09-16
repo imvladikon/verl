@@ -2556,7 +2556,7 @@ wheels = [
 [[package]]
 name = "megatron-bridge"
 version = "0.5.2"
-source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#c3c5e9c3a4a106b1e9a291e2c22c9ea571ae0f3c" }
+source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#664470c4318c8bb6d493547c864b023d9adc7de7" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -2580,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "megatron-core"
 version = "0.18.0"
-source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" }
+source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#2d9c2ec811d3a031133adbaf028303e9f2ec5355" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -5348,8 +5348,8 @@ wheels = [
 
 [[package]]
 name = "sglang"
-version = "0.0.0.dev18579+g88c31cbfb"
-source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#88c31cbfb4b3e4681a3b9c6bdaa0be5ff9f7fdc1" }
+version = "0.0.0.dev18604+g5cbd608d7"
+source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#5cbd608d77c21a63cde06ec24e75ac35dc4ecee7" }
 resolution-markers = [
     "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
@@ -6865,8 +6865,8 @@ glm = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#c3c5e9c3a4a106b1e9a291e2c22c9ea571ae0f3c" } },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" } },
+    { name = "megatron-bridge", version = "0.5.2", source = { git = "https://github.com/imvladikon/Megatron-Bridge.git?rev=glm-5.x#664470c4318c8bb6d493547c864b023d9adc7de7" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#2d9c2ec811d3a031133adbaf028303e9f2ec5355" } },
     { name = "numpy" },
     { name = "nvidia-modelopt" },
     { name = "nvtx" },
@@ -6881,7 +6881,7 @@ glm = [
     { name = "pytest-rerunfailures" },
     { name = "qwen-vl-utils" },
     { name = "ray", extra = ["default"], marker = "extra == 'extra-4-verl-glm' or (extra == 'extra-4-verl-cpu' and extra == 'extra-4-verl-fsdp') or (extra == 'extra-4-verl-fsdp' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-glm53-automodel' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-sglang' and extra == 'extra-4-verl-vllm') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-glm53-automodel') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-megatron') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-sglang') or (extra == 'extra-4-verl-cpu' and extra != 'extra-4-verl-glm' and extra == 'extra-4-verl-vllm')" },
-    { name = "sglang", version = "0.0.0.dev18579+g88c31cbfb", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#88c31cbfb4b3e4681a3b9c6bdaa0be5ff9f7fdc1" } },
+    { name = "sglang", version = "0.0.0.dev18604+g5cbd608d7", source = { git = "https://github.com/imvladikon/sglang.git?subdirectory=python&rev=glm-5.x#5cbd608d77c21a63cde06ec24e75ac35dc4ecee7" } },
     { name = "tensorboard" },
     { name = "tensordict" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
@@ -6906,7 +6906,7 @@ glm53-automodel = [
     { name = "hydra-core" },
     { name = "markdown-it-py" },
     { name = "mathruler" },
-    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#825ab89649fbea916ff39de5ef4dbb87f39831a3" } },
+    { name = "megatron-core", version = "0.18.0", source = { git = "https://github.com/imvladikon/Megatron-LM.git?rev=glm-5.x#2d9c2ec811d3a031133adbaf028303e9f2ec5355" } },
     { name = "nemo-automodel" },
     { name = "numpy" },
     { name = "nvtx" },
