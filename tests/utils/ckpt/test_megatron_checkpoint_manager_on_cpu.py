@@ -113,6 +113,7 @@ def _make_manager(
     use_distributed_optimizer=False,
     provider=None,
     hf_config=None,
+    save_lora_only=False,
 ):
     if save_contents is None:
         save_contents = ["model", "optimizer", "extra"]
@@ -123,6 +124,7 @@ def _make_manager(
         save_contents=list(save_contents),
         load_contents=list(load_contents),
         async_save=False,
+        save_lora_only=save_lora_only,
     )
 
     model = _make_mock_model()
@@ -727,3 +729,54 @@ class TestExportedHFConfigKeepsModelContextLength:
         # ``save_hf_pretrained`` regenerates config.json from the Megatron provider.
         mgr.bridge.save_hf_pretrained.assert_not_called()
         mgr.bridge.export_ckpt.assert_not_called()
+
+
+# ===========================================================================
+# Tests: save_lora_only on the Megatron path
+# ===========================================================================
+
+
+class _AdapterFilter:
+    """Stands in for a PEFT config: adapter parameters are the ones named like one."""
+
+    def adapter_key_filter(self, key: str) -> bool:
+        return "adapter" in key
+
+
+def _lora_manager(save_lora_only: bool, peft_cls=None):
+    return _make_manager(
+        use_dist_checkpointing=True, bridge=None, peft_cls=peft_cls, save_lora_only=save_lora_only
+    )
+
+
+_SHARDS = {"model": {"layer.adapter.weight": 1, "layer.weight": 2, "layer.adapter._extra_state": 3}}
+
+
+def test_save_without_lora_only_keeps_every_shard():
+    manager = _lora_manager(save_lora_only=False, peft_cls=_AdapterFilter())
+    assert manager._model_state_dict_for_save(_SHARDS) is _SHARDS
+
+
+def test_save_lora_only_drops_the_frozen_base_weights():
+    manager = _lora_manager(save_lora_only=True, peft_cls=_AdapterFilter())
+    selected = manager._model_state_dict_for_save(_SHARDS)
+    # The base weight is what used to make these checkpoints gigabytes per rank.
+    assert sorted(selected["model"]) == ["layer.adapter.weight"]
+    assert _SHARDS["model"], "the caller's state dict must not be mutated"
+
+
+def test_save_lora_only_without_a_peft_config_is_an_error():
+    manager = _lora_manager(save_lora_only=True, peft_cls=None)
+    with pytest.raises(ValueError, match="no PEFT config"):
+        manager._model_state_dict_for_save(_SHARDS)
+
+
+def test_save_lora_only_that_selects_nothing_is_an_error():
+    class _MatchesNothing:
+        def adapter_key_filter(self, key: str) -> bool:
+            return False
+
+    manager = _lora_manager(save_lora_only=True, peft_cls=_MatchesNothing())
+    # Silently writing an empty model section would produce a checkpoint that restores no adapter.
+    with pytest.raises(ValueError, match="kept no parameters"):
+        manager._model_state_dict_for_save(_SHARDS)

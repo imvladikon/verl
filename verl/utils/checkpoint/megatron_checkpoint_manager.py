@@ -112,6 +112,11 @@ def _config_to_shallow_dict(config):
     return vars(config)
 
 
+def _count_parameters(state_dict: dict) -> int:
+    """Parameters across the model sections of a sharded state dict, for a kept-vs-total report."""
+    return sum(len(section) for section in state_dict.values() if isinstance(section, dict))
+
+
 class MegatronCheckpointManager(BaseCheckpointManager):
     """Checkpoint manager for Megatron-LM distributed training.
 
@@ -1170,6 +1175,35 @@ class MegatronCheckpointManager(BaseCheckpointManager):
         else:
             finalize_save_fn()
 
+    def _model_state_dict_for_save(self, model_sharded_state_dict: dict) -> dict:
+        """The model shards this save should write, honouring ``checkpoint.save_lora_only``.
+
+        ``save_lora_only`` used to be read on the FSDP path only, so a Megatron LoRA run wrote the
+        frozen base weights into every checkpoint -- gigabytes per rank per save, of weights that
+        already exist upstream, with nothing in the log to say so. The load path already filters
+        through the same function, so saving unfiltered was the asymmetric half of that pair.
+        """
+        if not self.should_save_lora_only:
+            return model_sharded_state_dict
+        if self.peft_cls is None:
+            raise ValueError(
+                "checkpoint.save_lora_only is set but this model has no PEFT config, so there are "
+                "no adapter parameters to select"
+            )
+        selected = self._maybe_filter_peft_state_dict(dict(model_sharded_state_dict))
+        kept, total = _count_parameters(selected), _count_parameters(model_sharded_state_dict)
+        if kept == 0:
+            raise ValueError(
+                f"checkpoint.save_lora_only kept no parameters out of {total}; the adapter filter "
+                "and the model disagree, and this checkpoint could not restore the adapter"
+            )
+        log_with_rank(
+            f"model/dist_ckpt LoRA-only save: {kept} of {total} model parameters kept",
+            rank=self.rank,
+            logger=logger,
+        )
+        return selected
+
     def save_checkpoint(self, local_path: str, hdfs_path: str = None, global_step: int = 0, max_ckpt_to_keep=None):
         """Save a Megatron checkpoint under ``local_path`` (layout schema v2).
 
@@ -1239,9 +1273,15 @@ class MegatronCheckpointManager(BaseCheckpointManager):
                 model_sharded_state_dict = self._build_model_sharded_state_dict(metadata)
 
             if self.should_save_dist_ckpt_model:
-                model_state_dict.update(model_sharded_state_dict)
+                # ``save_lora_only`` was honoured on the FSDP path only, so a Megatron LoRA run
+                # wrote the frozen base weights into every checkpoint: gigabytes per rank per save,
+                # of weights that already exist upstream. The load path at
+                # ``_load_dist_checkpoint`` already filters through the same function, so saving
+                # unfiltered was also the asymmetric half of the pair.
+                saved_model_sharded_state_dict = self._model_state_dict_for_save(model_sharded_state_dict)
+                model_state_dict.update(saved_model_sharded_state_dict)
                 log_with_rank(
-                    f"model/dist_ckpt will save model shards: {model_sharded_state_dict.keys()}",
+                    f"model/dist_ckpt will save model shards: {saved_model_sharded_state_dict.keys()}",
                     rank=self.rank,
                     logger=logger,
                 )
