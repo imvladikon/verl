@@ -13,6 +13,10 @@
 #       truncation here means the data and the budget disagree and the run should stop, not silently
 #       train on half a reasoning trace.
 #
+# The engine is Megatron, which is the only path this model family is trained on here. An earlier
+# revision defaulted to FSDP because Megatron would not start on the SM80 box used for debugging;
+# that made the transformers kernel path look load-bearing when it is not, so the default is gone.
+#
 # Usage (single node):
 #   MODEL_PATH=/path/to/checkpoint TRAIN_FILE=/data/train.parquet VAL_FILE=/data/val.parquet \
 #   NPROC=8 ./examples/glm53_flash/run_glm53_flash_lora_sft_ru.sh
@@ -24,24 +28,23 @@ train_file=${TRAIN_FILE:?Set TRAIN_FILE to the prepared messages parquet}
 val_file=${VAL_FILE:-null}
 nproc=${NPROC:-8}
 nnodes=${NNODES:-1}
-engine=${ENGINE:-fsdp}
+# The 32-GPU runs target an explicit module list matching the RL actor rather than all-linear, so
+# the adapter trained here is the one RL can load. Override TARGET_MODULES to match that config.
+target_modules=${TARGET_MODULES:-all-linear}
+tp=${TP:-1}
+ep=${EP:-1}
+etp=${ETP:-}
+max_token_len_per_gpu=${MAX_TOKEN_LEN_PER_GPU:-8192}
 rank=${LORA_RANK:-32}
 alpha=${LORA_ALPHA:-64}
 lr=${LR:-1e-4}
 max_length=${MAX_LENGTH:-8192}
 train_batch_size=${TRAIN_BATCH_SIZE:-64}
 micro_batch_size=${MICRO_BATCH_SIZE:-1}
-max_token_len=${MAX_TOKEN_LEN_PER_GPU:-16384}
 epochs=${EPOCHS:-1}
 steps=${TOTAL_STEPS:--1}
 save_freq=${SAVE_FREQ:-200}
 test_freq=${TEST_FREQ:-100}
-# GLM-5.3-Flash has no Flash-Attention-2 path in its modeling code, and its grouped_mm experts
-# reject the unaligned pointers LoRA hands them; transformers reads the private key, so overriding
-# "experts_implementation" (as older scripts do) silently does nothing.
-attn_impl=${ATTN_IMPL:-eager}
-experts_impl=${EXPERTS_IMPL:-eager}
-remove_padding=${REMOVE_PADDING:-false}
 run_id=${GLM53_RUN_ID:-lora_sft_ru_$(date -u +%Y%m%dT%H%M%SZ)}
 output_dir=${OUTPUT_DIR:-"${repo_root}/outputs/glm53_flash/${run_id}"}
 
@@ -73,7 +76,7 @@ mkdir -p "${output_dir}"
   data.val_files="${val_file}" \
   data.train_batch_size="${train_batch_size}" \
   data.micro_batch_size_per_gpu="${micro_batch_size}" \
-  data.max_token_len_per_gpu="${max_token_len}" \
+  data.max_token_len_per_gpu="${max_token_len_per_gpu}" \
   data.use_dynamic_bsz=true \
   data.max_length="${max_length}" \
   data.truncation=error \
@@ -82,20 +85,17 @@ mkdir -p "${output_dir}"
   data.messages_key=messages \
   data.num_workers=4 \
   model.path="${model_path}" \
-  +model.override_config.attn_implementation="${attn_impl}" \
-  +model.override_config._experts_implementation="${experts_impl}" \
-  model.use_remove_padding="${remove_padding}" \
   model.enable_gradient_checkpointing=true \
   model.lora_rank="${rank}" \
   model.lora_alpha="${alpha}" \
-  model.target_modules=all-linear \
-  engine="${engine}" \
-  engine.param_offload=true \
-  engine.optimizer_offload=true \
-  engine.model_dtype=bf16 \
+  model.target_modules="${target_modules}" \
+  engine=megatron \
   engine.dtype=bfloat16 \
-  engine.use_torch_compile=false \
-  engine.use_orig_params=false \
+  engine.tensor_model_parallel_size="${tp}" \
+  engine.expert_model_parallel_size="${ep}" \
+  ${etp:+engine.expert_tensor_parallel_size="${etp}"} \
+  engine.sequence_parallel=true \
+  engine.use_remove_padding=true \
   optim.optimizer_impl=torch.optim \
   optim.optimizer=AdamW \
   optim.lr="${lr}" \
