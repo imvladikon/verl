@@ -218,3 +218,47 @@ def test_control_rpc_deadline_counts_from_the_call():
             )
 
     asyncio.run(run())
+
+
+def test_a_stalled_replica_reports_progress_before_the_timeout(caplog):
+    """A hung collective leaves the HTTP process answering, so silence is the only symptom."""
+
+    async def run():
+        stale_output = time.time() - 900
+        response = asyncio.get_running_loop().create_future()
+        with pytest.raises(TimeoutError):
+            await await_scheduler_response(
+                response,
+                timeout=0.3,
+                description="replica=0 node=1 generate",
+                process_failure=lambda: None,
+                last_scheduler_output=lambda: stale_output,
+                log_interval=0.05,
+            )
+
+    with caplog.at_level("INFO"):
+        asyncio.run(run())
+
+    waiting = [record.getMessage() for record in caplog.records if "still waiting" in record.getMessage()]
+    assert waiting, "a replica that produces nothing must say so before the timeout fires"
+    assert "replica=0 node=1 generate" in waiting[0], waiting[0]
+    # The seconds-since-output figure is what separates a stall from a long queue.
+    assert "since the last scheduler output" in waiting[0], waiting[0]
+
+
+def test_progress_reporting_stays_quiet_on_a_fast_response(caplog):
+    async def run():
+        async def quick():
+            return {"token_ids": [1]}
+
+        return await await_scheduler_response(
+            quick(),
+            timeout=5.0,
+            description="generate",
+            process_failure=lambda: None,
+            log_interval=60.0,
+        )
+
+    with caplog.at_level("INFO"):
+        assert asyncio.run(run()) == {"token_ids": [1]}
+    assert not [r for r in caplog.records if "still waiting" in r.getMessage()]

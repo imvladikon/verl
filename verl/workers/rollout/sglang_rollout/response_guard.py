@@ -15,10 +15,15 @@
 """Bound direct tokenizer-manager RPCs when a scheduler stops replying."""
 
 import asyncio
+import logging
 import math
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
+
+logger = logging.getLogger(__file__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 _T = TypeVar("_T")
 
@@ -35,6 +40,7 @@ async def await_scheduler_response(
     description: str,
     process_failure: Callable[[], str | None],
     last_scheduler_output: Callable[[], float] | None = None,
+    log_interval: float = 60.0,
 ) -> _T:
     """Wait for a response, scheduler exit, or a finite deadline.
 
@@ -47,12 +53,18 @@ async def await_scheduler_response(
     the deadline counts from the later of the call and that output, so requests
     queued behind a busy but live scheduler never time out, while a scheduler that
     stops producing any output still fails after ``timeout`` seconds.
+
+    While waiting, report progress every ``log_interval`` seconds. A replica whose
+    collective hangs keeps its HTTP process answering and its requests running, so the
+    only external symptom is silence; without this line that silence is indistinguishable
+    from a long queue until the timeout finally fires, which for generation is hours.
     """
     task = asyncio.ensure_future(response)
     try:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("SGLang response timeout must be a positive finite number")
         started = time.time()
+        last_logged = started
         while True:
             if task.done():
                 return task.result()
@@ -60,6 +72,21 @@ async def await_scheduler_response(
             if failure is not None:
                 raise RuntimeError(f"SGLang {description} failed: {failure}. Check the scheduler log for the cause.")
             last_output = last_scheduler_output() if last_scheduler_output is not None else started
+            now = time.time()
+            if now - last_logged >= log_interval:
+                last_logged = now
+                silence = (
+                    f", {now - last_output:.0f}s since the last scheduler output"
+                    if last_scheduler_output is not None
+                    else ""
+                )
+                logger.info(
+                    "SGLang %s still waiting after %.0fs%s (timeout %gs)",
+                    description,
+                    now - started,
+                    silence,
+                    timeout,
+                )
             remaining = max(started, last_output) + timeout - time.time()
             if remaining <= 0:
                 waited = "no scheduler output" if last_scheduler_output is not None else "no scheduler response"
