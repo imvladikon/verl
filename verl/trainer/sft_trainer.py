@@ -498,6 +498,12 @@ class SFTTrainer:
 
 def run_sft(config):
     from verl.utils.distributed import initialize_global_process_group
+    from verl.utils.stack_dump import install_hang_dump
+
+    # Before the process group exists, so a rank that hangs during setup is covered too.
+    interval = install_hang_dump()
+    if interval:
+        logger.info("Hang dump armed: every thread's stack every %.0fs", interval)
 
     initialize_global_process_group()
     trainer = SFTTrainer(config=config)
