@@ -145,9 +145,29 @@ class SFTTrainer:
             "task_type": str(task_type),
         }
 
+    def _check_engine_optimizer_match(self):
+        """Refuse an optimizer that belongs to a different engine than the one selected.
+
+        ``engine`` and ``optim`` are separate Hydra groups with separate defaults, so
+        ``engine=megatron`` on the command line leaves the FSDP optimizer in place. The mismatch
+        surfaces far into the run as a missing attribute, after the weights are loaded -- and an
+        attribute that happens to exist on both configs would not surface at all.
+        """
+        families = {}
+        for group, suffix in (("engine", "EngineConfig"), ("optim", "OptimizerConfig")):
+            target = str(self.config.get(group, {}).get("_target_", ""))
+            families[group] = target.rsplit(".", 1)[-1].removesuffix(suffix)
+        if all(families.values()) and families["engine"] != families["optim"]:
+            raise ValueError(
+                f"engine is {families['engine']} but optim is {families['optim']}. These are "
+                "separate config groups, so selecting an engine does not select its optimizer: "
+                "pass the matching optim group too (engine=megatron needs optim=megatron)."
+            )
+
     def _build_config(self):
         from verl.utils.config import omega_conf_to_dataclass
 
+        self._check_engine_optimizer_match()
         self.model_config = omega_conf_to_dataclass(self.config.model)
         self.engine_config = omega_conf_to_dataclass(self.config.engine)
         self.optimizer_config = omega_conf_to_dataclass(self.config.optim)
