@@ -18,6 +18,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import types
 
 import pytest
 
@@ -37,7 +38,14 @@ preflight = _load()
 
 def _args(**kw):
     defaults = dict(
-        model=None, kernels=False, attention_backend=None, group=None, json=True, allow_fail=None, engine=None
+        model=None,
+        kernels=False,
+        attention_backend=None,
+        group=None,
+        json=True,
+        allow_fail=None,
+        engine=None,
+        world_size=None,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -169,3 +177,26 @@ def test_allow_fail_downgrades_a_failure_without_hiding_it(monkeypatch):
 
     (unrelated,) = preflight.run(_args(allow_fail=["sglang"]))
     assert unrelated.status == preflight.FAIL
+
+
+def test_world_size_comes_from_the_launcher_then_the_environment(monkeypatch):
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    assert preflight.world_size_of(_args()) == 1
+    monkeypatch.setenv("WORLD_SIZE", "32")
+    assert preflight.world_size_of(_args()) == 32
+    # An explicit value wins: preflight usually runs before torchrun sets anything.
+    assert preflight.world_size_of(_args(world_size=8)) == 8
+
+
+def test_unpinned_autotune_is_fatal_only_with_more_than_one_rank(monkeypatch):
+    monkeypatch.delenv("MCORE_FLA_FIXED_AUTOTUNE_META", raising=False)
+    monkeypatch.setattr(
+        preflight, "_module", lambda name: types.SimpleNamespace(fla_autotune_pinning_requested=lambda: False)
+    )
+
+    single = preflight._check_fla_autotune(_args(world_size=1))
+    assert single.status == preflight.WARN, "one rank cannot disagree with itself"
+
+    many = preflight._check_fla_autotune(_args(world_size=32))
+    assert many.status == preflight.FAIL, "ranks that autotune apart can disagree on collective shapes"
+    assert "world_size=32" in many.detail

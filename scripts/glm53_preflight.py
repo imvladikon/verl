@@ -412,14 +412,19 @@ def _check_fla_autotune(args) -> Result:
         )
     requested = module.fla_autotune_pinning_requested()
     pinned = os.environ.get("MCORE_FLA_FIXED_AUTOTUNE_META", "<unset>")
-    detail = f"MCORE_FLA_FIXED_AUTOTUNE_META={pinned}, pinning={requested}"
+    world_size = world_size_of(args)
+    detail = f"MCORE_FLA_FIXED_AUTOTUNE_META={pinned}, pinning={requested}, world_size={world_size}"
     if not requested:
+        # Each rank autotunes on its own timings, and the block size it picks changes the reduction
+        # order. At bf16 that is enough to move a MoE top-k decision, and once two ranks disagree
+        # about which experts a token goes to, their collectives disagree about shape. On one rank
+        # that is a reproducibility problem; across ranks it is a hang.
         return Result(
             "fla autotune determinism",
-            WARN,
+            FAIL if world_size > 1 else WARN,
             detail,
-            "set MCORE_FLA_FIXED_AUTOTUNE_META=1 (or enable torch deterministic mode) for run-to-run "
-            "reproducibility of KDA layers",
+            "set MCORE_FLA_FIXED_AUTOTUNE_META=1 (or enable torch deterministic mode): ranks that "
+            "autotune independently can disagree on MoE top-k and then on collective shapes",
         )
     return Result("fla autotune determinism", PASS, detail)
 
@@ -560,6 +565,18 @@ _FUSED_KERNEL_FUNCTIONS = (
     "causal_conv1d_fn",
     "causal_conv1d_update",
 )
+
+
+def world_size_of(args) -> int:
+    """How many ranks this run will have, from the launcher or from torchrun's own variable."""
+    explicit = getattr(args, "world_size", None)
+    if explicit:
+        return int(explicit)
+    for name in ("WORLD_SIZE", "PMI_SIZE"):
+        value = os.environ.get(name)
+        if value and value.isdigit():
+            return int(value)
+    return 1
 
 
 def bound_kernel_implementation(function) -> tuple[str, str]:
@@ -944,6 +961,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", help="HF checkpoint directory to check and to resolve backends for")
     parser.add_argument("--kernels", action="store_true", help="run the GPU kernel probes (slower)")
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        help="ranks this run will have (nnodes x nproc). Defaults to WORLD_SIZE, else 1. Some "
+        "hazards are only fatal with more than one rank.",
+    )
     parser.add_argument(
         "--engine",
         choices=("megatron", "fsdp"),
