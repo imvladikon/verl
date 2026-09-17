@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import secrets
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -604,11 +605,23 @@ class SGLangHttpServer:
         # A generation request may wait in the scheduler queue far longer than any single request takes
         # (e.g. validation over hundreds of prompts), so it only times out when the scheduler stops producing
         # output. Control RPCs keep a per-call deadline.
+        #
+        # The timestamp has to move only on generation output. `last_receive_tstamp` moves on every
+        # message the scheduler sends, and a scheduler whose NCCL collective is hung keeps answering
+        # control traffic: reading that one, the deadline is pushed forward forever and a stalled
+        # replica never fails. `last_generation_tstamp` (glm-5.x sglang) moves only in
+        # `_handle_batch_output`; fall back to the weaker signal when serving a build without it.
         last_scheduler_output = None
-        if generation and hasattr(self.tokenizer_manager, "last_receive_tstamp"):
-
-            def last_scheduler_output():
-                return self.tokenizer_manager.last_receive_tstamp
+        if generation:
+            for attribute in ("last_generation_tstamp", "last_receive_tstamp"):
+                if hasattr(self.tokenizer_manager, attribute):
+                    last_scheduler_output = partial(getattr, self.tokenizer_manager, attribute)
+                    if attribute != "last_generation_tstamp":
+                        logger.warning(
+                            "SGLang exposes no last_generation_tstamp: a replica whose collective "
+                            "hangs while its scheduler still answers control traffic will not time out"
+                        )
+                    break
 
         return await await_scheduler_response(
             response,
