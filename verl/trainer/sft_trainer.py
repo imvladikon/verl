@@ -14,6 +14,7 @@
 
 
 import os
+import time
 from functools import partial
 
 from tensordict.tensorclass import NonTensorData
@@ -39,7 +40,7 @@ from verl.utils.device import auto_set_device, get_device_name
 from verl.utils.distributed import destroy_global_process_group
 from verl.utils.logger import log_with_rank
 from verl.utils.memory_utils import aggressive_empty_cache
-from verl.utils.profiler import log_gpu_memory_usage
+from verl.utils.profiler import log_gpu_memory_usage, marked_timer
 from verl.utils.tracking import Tracking
 from verl.workers.engine_workers import TrainingWorker
 
@@ -367,6 +368,7 @@ class SFTTrainer:
 
             aggressive_empty_cache(force_sync=True)
             log_gpu_memory_usage(f"rank {self.rank}: At start of epoch {epoch}", logger=logger)
+            iteration_end = time.time()
 
             for step_in_epoch, data in enumerate(
                 tqdm(
@@ -378,6 +380,10 @@ class SFTTrainer:
                 )
             ):
                 global_step += 1
+                # The dataloader wait is the gap between the end of the previous iteration and the
+                # start of this one; it is invisible from inside the loop body, and on this model it
+                # is a real suspect (three chat-template renders per example, in __getitem__).
+                timing_raw: dict[str, float] = {"dataloader": time.time() - iteration_end}
 
                 # construct tensordict
                 data = tu.get_tensordict(tensor_dict=data, non_tensor_dict=meta_info)
@@ -391,7 +397,8 @@ class SFTTrainer:
                 if global_step == self.start_profile_step:
                     self.training_client.start_profile()
                 # train for on batch
-                output = self.training_client.train_batch(data=data)
+                with marked_timer("train_batch", timing_raw):
+                    output = self.training_client.train_batch(data=data)
                 # SFT has one train_batch per step (no PPO-style mini-batch loop), so advancing
                 # the profiler here is the per-step boundary; it also drives a torch.profiler
                 # schedule when one is configured (its unit is one such training step).
@@ -425,31 +432,42 @@ class SFTTrainer:
                 # early exit or validation step
                 if is_last_step and self.val_dataloader is not None or (self.test_freq > 0 and is_valid_step):
                     # Perform validation
-                    val_losses = []
-                    for val_data in self.val_dataloader:
-                        val_data = tu.get_tensordict(tensor_dict=val_data, non_tensor_dict=meta_info)
-                        output = self.training_client.infer_batch(val_data)
+                    with marked_timer("validation", timing_raw):
+                        val_losses = []
+                        for val_data in self.val_dataloader:
+                            val_data = tu.get_tensordict(tensor_dict=val_data, non_tensor_dict=meta_info)
+                            output = self.training_client.infer_batch(val_data)
+
+                            if self.engine.is_mp_src_rank_with_outputs():
+                                metrics = tu.get(output, "metrics")
+                                val_losses.append(metrics["loss"])
 
                         if self.engine.is_mp_src_rank_with_outputs():
-                            metrics = tu.get(output, "metrics")
-                            val_losses.append(metrics["loss"])
+                            val_loss = torch.mean(torch.tensor(val_losses, device=self.device_name))
+                            # average over data parallel group
+                            dp_group = self.engine.get_data_parallel_group()
+                            if dp_group is not None:
+                                torch.distributed.all_reduce(val_loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
 
-                    if self.engine.is_mp_src_rank_with_outputs():
-                        val_loss = torch.mean(torch.tensor(val_losses, device=self.device_name))
-                        # average over data parallel group
-                        dp_group = self.engine.get_data_parallel_group()
-                        if dp_group is not None:
-                            torch.distributed.all_reduce(val_loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
-
-                    if is_logging:
-                        metric = {"val/loss": val_loss.detach().item()}
-                        tracking.log(data=metric, step=global_step)
-                        last_valid_metric = metric
-                    torch.distributed.barrier()
+                        if is_logging:
+                            metric = {"val/loss": val_loss.detach().item()}
+                            tracking.log(data=metric, step=global_step)
+                            last_valid_metric = metric
+                        torch.distributed.barrier()
 
                 if is_last_step or (self.save_freq > 0 and is_save_step):
-                    aggressive_empty_cache(force_sync=True)
-                    self.ckpt_handler.save_checkpoint(step=global_step)
+                    with marked_timer("save_checkpoint", timing_raw):
+                        aggressive_empty_cache(force_sync=True)
+                        self.ckpt_handler.save_checkpoint(step=global_step)
+
+                # One log per iteration, after the occasional phases, so a step that validated or
+                # saved reports where its seconds went instead of just looking slow.
+                iteration_end = time.time()
+                if is_logging:
+                    tracking.log(
+                        data={f"timing_s/{name}": value for name, value in timing_raw.items()},
+                        step=global_step,
+                    )
 
                 if is_last_step:
                     if is_logging:
