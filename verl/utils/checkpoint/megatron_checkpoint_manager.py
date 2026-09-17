@@ -1287,6 +1287,16 @@ class MegatronCheckpointManager(BaseCheckpointManager):
                 )
             if self.should_save_hf_model and self.peft_cls is not None:
                 peft_state = self._maybe_filter_peft_state_dict(dict(model_sharded_state_dict))
+                # The mbridge path filters to the adapter as well, and used to do it silently. A
+                # reader checking that only the adapter was written found nothing in the log and
+                # could not tell this configuration from one that writes the base weights, which
+                # is exactly the confusion `save_lora_only` was added to end.
+                log_with_rank(
+                    f"model/dist_ckpt PEFT adapter shards: {_count_parameters(peft_state)} of "
+                    f"{_count_parameters(model_sharded_state_dict)} model parameters kept",
+                    rank=self.rank,
+                    logger=logger,
+                )
                 model_state_dict.update(peft_state)
 
             if self.should_save_optimizer:
