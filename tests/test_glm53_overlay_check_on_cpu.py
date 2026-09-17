@@ -82,3 +82,44 @@ def test_only_paths_derived_from_the_files_location_are_flagged():
     assert check.relocation_risks("base = Path(__file__).parent\n"), "a path built from __file__ moves with the file"
     # Naming a logger after __file__ reads no directory, so it must not be reported.
     assert check.relocation_risks("logger = logging.getLogger(__file__)\n") == []
+
+
+def test_relative_star_reexports_are_followed(monkeypatch):
+    # verl's config and debug packages are built almost entirely out of `from .x import *`.
+    _repo(
+        monkeypatch,
+        {
+            "pkg/workers/config/__init__.py": "from .critic import *\n",
+            "pkg/workers/config/critic.py": "class CriticConfig:\n    pass\n",
+        },
+    )
+    assert check.unresolved_imports("from pkg.workers.config import CriticConfig\n", "r", "b", "", "pkg") == []
+
+
+def test_a_parent_relative_star_reexport_is_followed(monkeypatch):
+    # `from ..profiler import *` inside pkg.utils.debug means pkg.utils.profiler.
+    _repo(
+        monkeypatch,
+        {
+            "pkg/utils/debug/__init__.py": "from ..profiler import *\n",
+            "pkg/utils/profiler/__init__.py": "def marked_timer():\n    pass\n",
+        },
+    )
+    assert check.unresolved_imports("from pkg.utils.debug import marked_timer\n", "r", "b", "", "pkg") == []
+
+
+def test_a_package_without_an_init_is_not_called_missing(monkeypatch):
+    _repo(monkeypatch, {})
+    monkeypatch.setattr(check, "directory_exists", lambda repo, revision, path: path == "pkg/srt/layers")
+    assert check.unresolved_imports("from pkg.srt.layers import thing\n", "r", "b", "", "pkg") == []
+
+
+def test_another_modules_file_attribute_does_not_relocate():
+    # `Path(other.__file__).parent` points into that module's install, not into this overlay.
+    assert check.relocation_risks("lib = str(Path(cu12_mod.__file__).parent / 'lib')\n") == []
+    assert check.relocation_risks("here = Path(__file__).parent\n"), "the file's own location does move"
+
+
+def test_a_path_annotation_is_not_a_relocation():
+    assert check.relocation_risks("    tool_config_path: Optional[str] = None\n") == []
+    assert check.relocation_risks('@hydra.main(config_path="config")\n')

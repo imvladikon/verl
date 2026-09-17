@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 
@@ -52,12 +53,26 @@ def module_paths(module: str, root: str) -> list[str]:
     return [f"{prefix}{relative}.py", f"{prefix}{relative}/__init__.py"]
 
 
-def star_sources(source: str) -> list[str]:
-    """Modules this one re-exports wholesale, whose names it therefore also binds."""
+def resolve_relative(module: str | None, level: int, package: str) -> str:
+    """`from ..profiler import *` inside verl.utils.debug means verl.utils.profiler."""
+    if not level:
+        return module or ""
+    base = package.split(".")
+    if level > 1:
+        base = base[: len(base) - (level - 1)]
+    return ".".join([*base, module] if module else base)
+
+
+def star_sources(source: str, package: str) -> list[str]:
+    """Modules this one re-exports wholesale, whose names it therefore also binds.
+
+    verl's config and debug packages are built almost entirely out of `from .x import *`, and
+    those are relative: resolving them as absolute names loses every re-exported symbol.
+    """
     return [
-        node.module
+        resolve_relative(node.module, node.level, package)
         for node in ast.parse(source).body
-        if isinstance(node, ast.ImportFrom) and node.module and any(a.name == "*" for a in node.names)
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
     ]
 
 
@@ -92,6 +107,17 @@ def top_level_names(source: str) -> set[str]:
     return _bound_names(ast.parse(source).body)
 
 
+def directory_exists(repo: str, revision: str, path: str) -> bool:
+    """Whether a path is a directory at a revision, for packages that carry no __init__."""
+    result = subprocess.run(
+        ["git", "-C", repo, "ls-tree", "-d", "--name-only", revision, path.rstrip("/")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def names_exported_by(module: str, repo: str, base: str, root: str, depth: int = 3) -> set[str] | None:
     """Every name the module binds at the base revision, following `import *` re-exports.
 
@@ -99,13 +125,16 @@ def names_exported_by(module: str, repo: str, base: str, root: str, depth: int =
     that, every name it re-exports looks missing.
     """
     # An empty __init__.py is an empty string, not a missing file: compare against None.
-    candidates = (read_at(repo, base, path) for path in module_paths(module, root))
-    source = next((text for text in candidates if text is not None), None)
-    if source is None:
+    candidates = ((path, read_at(repo, base, path)) for path in module_paths(module, root))
+    matched = next(((path, text) for path, text in candidates if text is not None), None)
+    if matched is None:
         return None
+    path, source = matched
+    # A package's own name is the base for its relative imports; a plain module's is its parent.
+    package = module if path.endswith("/__init__.py") else module.rsplit(".", 1)[0]
     names = top_level_names(source)
     if depth > 0:
-        for reexported in star_sources(source):
+        for reexported in star_sources(source, package):
             names |= names_exported_by(reexported, repo, base, root, depth - 1) or set()
     return names
 
@@ -120,6 +149,9 @@ def unresolved_imports(source: str, repo: str, base: str, root: str, package: st
             continue  # third-party and stdlib come from the image's environment, not this tree
         available = names_exported_by(node.module, repo, base, root)
         if available is None:
+            prefix = f"{root.rstrip('/')}/" if root else ""
+            if directory_exists(repo, base, prefix + node.module.replace(".", "/")):
+                continue  # a package with no __init__: its contents cannot be enumerated from here
             problems.append(f"{node.module} does not exist at {base}")
             continue
         for alias in node.names:
@@ -141,8 +173,11 @@ def relocation_risks(source: str) -> list[str]:
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        resolves_path = "__file__" in stripped and any(m in stripped for m in _PATH_FROM_FILE)
-        if resolves_path or "config_path" in stripped:
+        # `other_module.__file__` belongs to that module and does not move with this overlay.
+        own_file = re.search(r"(?<![\w.])__file__", stripped) is not None
+        resolves_path = own_file and any(m in stripped for m in _PATH_FROM_FILE)
+        # Only a config_path actually set to a literal relocates; a field annotated `= None` does not.
+        if resolves_path or re.search(r"""config_path\s*=\s*['"]""", stripped):
             risks.append(f"line {number}: {stripped[:90]}")
     return risks
 
@@ -157,7 +192,7 @@ def main() -> int:
     args = parser.parse_args()
 
     source = open(args.file).read()  # noqa: SIM115
-    package = args.package or args.repo.rstrip("/").rsplit("/", 1)[-1].replace("-", "_").lower()
+    package = args.package or args.repo.rstrip("/").rsplit("/", 1)[-1].replace("-", ".").lower()
 
     problems = unresolved_imports(source, args.repo, args.base, args.root, package)
     risks = relocation_risks(source)
