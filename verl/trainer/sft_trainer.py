@@ -41,6 +41,7 @@ from verl.utils.distributed import destroy_global_process_group
 from verl.utils.logger import log_with_rank
 from verl.utils.memory_utils import aggressive_empty_cache
 from verl.utils.profiler import log_gpu_memory_usage, marked_timer
+from verl.utils.seqlen_balancing import calculate_workload
 from verl.utils.stack_dump import heartbeat as hang_heartbeat
 from verl.utils.tracking import Tracking
 from verl.workers.engine_workers import TrainingWorker
@@ -308,13 +309,6 @@ class SFTTrainer:
         else:
             batch_seqlens: torch.Tensor = data["attention_mask"].sum(dim=-1)
         batch_seqlens = batch_seqlens.to(self.device_name)  # (global_bsz // dp)
-        if self.engine.get_data_parallel_size() > 1:
-            output_tensor = torch.empty(
-                (batch_seqlens.shape[0] * self.engine.get_data_parallel_size(),),
-                dtype=batch_seqlens.dtype,
-                device=self.device_name,
-            )  # (global_bsz,)
-
         dp_group = self.engine.get_data_parallel_group()
         dp_size = self.engine.get_data_parallel_size()
 
@@ -335,6 +329,31 @@ class SFTTrainer:
 
         batch_seqlens = output_tensor.tolist()
         return batch_seqlens
+
+    def _dp_imbalance_metrics(self, batch_seqlens: list[int]) -> dict[str, float]:
+        """How unevenly this step's tokens fell across data-parallel ranks.
+
+        The sampler hands every rank the same number of samples, not the same number of tokens, and
+        nothing downstream moves tokens between ranks: rearrange_micro_batches syncs the micro-batch
+        *count* over the dp group and then partitions each rank's own samples. Every MoE layer meets
+        at the dispatcher's all-gather over the expert group, so a step costs the slowest rank rather
+        than the average one, and max_over_mean is the factor a global balance would give back.
+
+        Free to compute: batch_seqlens is already all-gathered in rank order by _get_batch_seqlens.
+        """
+        dp_size = self.engine.get_data_parallel_size()
+        if dp_size <= 1 or len(batch_seqlens) % dp_size:
+            return {}
+        seqlens = torch.tensor(batch_seqlens, dtype=torch.long).view(dp_size, -1)
+        tokens = seqlens.sum(dim=1).double()
+        # Attention is quadratic in sequence length, so equal token counts are not equal work.
+        workload = calculate_workload(seqlens.reshape(-1)).view(dp_size, -1).sum(dim=1).double()
+        return {
+            "train/dp_tokens_max": tokens.max().item(),
+            "train/dp_tokens_min": tokens.min().item(),
+            "train/dp_tokens_max_over_mean": (tokens.max() / tokens.mean()).item(),
+            "train/dp_workload_max_over_mean": (workload.max() / workload.mean()).item(),
+        }
 
     def fit(self):
         is_logging = self.engine.is_mp_src_rank_with_outputs() and self.engine.get_data_parallel_rank() == 0
@@ -442,6 +461,7 @@ class SFTTrainer:
                     ).item()
                     total_tokens += metrics["train/global_tokens"]
                     metrics["train/total_tokens(B)"] = total_tokens / 1e9
+                    metrics.update(self._dp_imbalance_metrics(batch_seqlens))
 
                     if self.engine.get_data_parallel_rank() == 0:
                         tracking.log(data=metrics, step=global_step)
