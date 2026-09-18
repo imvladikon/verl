@@ -72,7 +72,12 @@ from verl.trainer.ppo.utils import (
     need_reference_policy,
     need_teacher_policy,
 )
-from verl.trainer.ppo.v1.replay_buffer import DAPO_FILTERED_REWARD_COUNTS_KEY, ReplayBuffer, ReplayBufferAsync
+from verl.trainer.ppo.v1.replay_buffer import (
+    DAPO_FILTERED_REWARD_COUNTS_KEY,
+    ReplayBuffer,
+    ReplayBufferAsync,
+    summarize_dapo_filtered_rewards,
+)
 from verl.trainer.ppo.v1.utils import MetricsAggregator, compute_advantage_for_multi_trajectories
 from verl.utils import tensordict_utils as tu
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
@@ -521,6 +526,8 @@ class PPOTrainer(ABC):
             tq.kv_clear(keys=batch.keys, partition_id=batch.partition_id)
 
             dapo_filtered_reward_counts = metrics.pop(DAPO_FILTERED_REWARD_COUNTS_KEY, None)
+            if dapo_filtered_reward_counts:
+                metrics.update(summarize_dapo_filtered_rewards(dapo_filtered_reward_counts))
             self.logger.log(data=metrics, step=self.global_steps)
             if dapo_filtered_reward_counts:
                 self.dapo_filtered_reward_logger.log(

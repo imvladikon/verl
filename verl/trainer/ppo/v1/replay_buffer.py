@@ -32,6 +32,31 @@ DAPO_FILTERED_REWARD_COUNTS_KEY = "_dapo_filtered_reward_counts"
 FILTER_GROUPS_REWARD_METRIC = "reward"
 
 
+def summarize_dapo_filtered_rewards(reward_counts: dict) -> dict[str, int]:
+    """Split the dropped groups by the sign of the value their members agreed on.
+
+    A group is dropped when its metric has no spread, and it can get there from either end: every
+    sample solved it, or none did. Those are different problems -- the first says the data is too
+    easy for this policy, the second that the reward is refusing everything the policy produces --
+    and the group count alone cannot tell them apart.
+
+    The breakdown is already computed for the wandb table (``DapoFilteredRewardTableLogger``), which
+    is deliberately wandb-only because a value-distribution-over-time view is a table. These scalars
+    carry the same answer to every other backend, where the table is silently skipped today.
+    """
+    by_sign = Counter()
+    for value, count in reward_counts.items():
+        value = float(value)
+        sign = "positive" if value > 0 else "negative" if value < 0 else "zero"
+        by_sign[sign] += int(count)
+    return {
+        "filter_groups/dropped_groups": sum(by_sign.values()),
+        "filter_groups/dropped_all_positive": by_sign["positive"],
+        "filter_groups/dropped_all_negative": by_sign["negative"],
+        "filter_groups/dropped_all_zero": by_sign["zero"],
+    }
+
+
 def _accumulate_eviction_metrics(acc: dict, new: dict, stale_count: int) -> None:
     """Merge one poll iteration's eviction metrics into ``acc`` in place.
 
