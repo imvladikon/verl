@@ -41,6 +41,7 @@ from verl.utils.distributed import destroy_global_process_group
 from verl.utils.logger import log_with_rank
 from verl.utils.memory_utils import aggressive_empty_cache
 from verl.utils.profiler import log_gpu_memory_usage, marked_timer
+from verl.utils.stack_dump import heartbeat as hang_heartbeat
 from verl.utils.tracking import Tracking
 from verl.workers.engine_workers import TrainingWorker
 
@@ -483,6 +484,8 @@ class SFTTrainer:
                 # One log per iteration, after the occasional phases, so a step that validated or
                 # saved reports where its seconds went instead of just looking slow.
                 iteration_end = time.time()
+                # Progress, so the hang dump fires only when a step fails to finish.
+                hang_heartbeat()
                 if is_logging:
                     tracking.log(
                         data={f"timing_s/{name}": value for name, value in timing_raw.items()},
@@ -498,16 +501,19 @@ class SFTTrainer:
 
 def run_sft(config):
     from verl.utils.distributed import initialize_global_process_group
+    from verl.utils.stack_dump import disarm as disarm_hang_dump
     from verl.utils.stack_dump import install_hang_dump
 
     # Before the process group exists, so a rank that hangs during setup is covered too.
     interval = install_hang_dump()
     if interval:
-        logger.info("Hang dump armed: every thread's stack every %.0fs", interval)
+        logger.info("Hang dump armed: stacks when a step does not finish within %.0fs", interval)
 
     initialize_global_process_group()
     trainer = SFTTrainer(config=config)
     trainer.fit()
+    # Shutdown is allowed to take its time; a dump here would only describe the teardown.
+    disarm_hang_dump()
     destroy_global_process_group()
 
 

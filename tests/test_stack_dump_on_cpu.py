@@ -11,13 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""A rank that hangs before its first collective has to leave a stack behind."""
+"""A rank that stops making progress must say where, and a healthy one must stay quiet."""
 
 import subprocess
 import sys
 import textwrap
 
-from verl.utils.stack_dump import install_hang_dump
+from verl.utils.stack_dump import disarm, install_hang_dump
+
+_REPO = str(__file__).rsplit("/tests/", 1)[0]
 
 
 def test_disabled_unless_asked(monkeypatch):
@@ -31,27 +33,40 @@ def test_a_malformed_interval_does_not_break_startup(monkeypatch):
     assert install_hang_dump() is None
 
 
-def test_the_environment_supplies_the_interval(monkeypatch, tmp_path):
+def test_each_rank_writes_its_own_file(monkeypatch, tmp_path):
     monkeypatch.setenv("VERL_HANG_DUMP_SECONDS", "900")
-    with open(tmp_path / "out", "w") as stream:
-        assert install_hang_dump(stream=stream) == 900.0
-    import faulthandler
+    monkeypatch.setenv("RANK", "16")
+    try:
+        assert install_hang_dump(directory=str(tmp_path)) == 900.0
+        assert (tmp_path / "faulthandler_rank16.log").exists()
+    finally:
+        disarm()
 
-    faulthandler.cancel_dump_traceback_later()
 
-
-def test_a_hung_process_prints_its_stack():
-    """The point of the tool: a process stuck in a wait still reports where."""
+def _run(body: str, timeout: int = 40) -> str:
     program = textwrap.dedent(
+        f"""
+        import sys, threading, time
+        sys.path.insert(0, {_REPO!r})
+        from verl.utils.stack_dump import install_hang_dump, heartbeat, disarm
+        install_hang_dump(0.3)
+        def the_step():
+            time.sleep(0.1)
+        def the_hang():
+            threading.Event().wait(3)
+        {body}
         """
-        import sys, threading
-        sys.path.insert(0, %r)
-        from verl.utils.stack_dump import install_hang_dump
-        install_hang_dump(0.2)
-        def wait_forever():
-            threading.Event().wait(5)
-        wait_forever()
-        """
-    ) % str(__file__).rsplit("/tests/", 1)[0]
-    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=30)
-    assert "wait_forever" in result.stderr, result.stderr[-500:]
+    )
+    return subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=timeout).stderr
+
+
+def test_a_step_that_never_finishes_is_reported():
+    assert "the_hang" in _run("the_hang()")
+
+
+def test_a_run_that_keeps_finishing_steps_stays_quiet():
+    """The defect this replaces: a timer fired on schedule and buried the real dump in noise."""
+    body = "for _ in range(12):\n    the_step()\n    heartbeat()\ndisarm()"
+    stderr = _run(body)
+    assert "the_step" not in stderr, stderr[-400:]
+    assert "Timeout" not in stderr, stderr[-400:]
