@@ -360,10 +360,15 @@ class SFTTrainer:
         tokens = seqlens.sum(dim=1).double()
         # Attention is quadratic in sequence length, so equal token counts are not equal work.
         workload = calculate_workload(seqlens.reshape(-1)).view(dp_size, -1).sum(dim=1).double()
+        # Both the spread and the level: the spread says what balancing could return, the level is
+        # what a step's cost should track if the step really is the slowest rank. Reporting only the
+        # spread leaves that untestable, because a ratio is normalized and correlates with nothing.
         return {
             f"train/{prefix}_tokens_max": tokens.max().item(),
             f"train/{prefix}_tokens_min": tokens.min().item(),
             f"train/{prefix}_tokens_max_over_mean": (tokens.max() / tokens.mean()).item(),
+            f"train/{prefix}_workload_max": workload.max().item(),
+            f"train/{prefix}_workload_mean": workload.mean().item(),
             f"train/{prefix}_workload_max_over_mean": (workload.max() / workload.mean()).item(),
         }
 
