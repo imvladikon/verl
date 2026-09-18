@@ -75,6 +75,23 @@ def _capture(model, sink: dict):
     return handles
 
 
+def _diff(left: dict, right: dict) -> dict:
+    """How far apart two captures are: which layers re-routed, how many tokens, and the probs gap."""
+    result = {"layers": [], "tokens": 0, "max_probs_delta": 0.0}
+    for name in sorted(set(left) & set(right)):
+        probs_left, map_left = left[name]
+        probs_right, map_right = right[name]
+        if map_left.shape == map_right.shape and not torch.equal(map_left, map_right):
+            result["layers"].append(name)
+            # One token counts once, however many of its experts changed.
+            result["tokens"] += int((map_left != map_right).any(dim=-1).sum())
+        if probs_left.shape == probs_right.shape:
+            result["max_probs_delta"] = max(
+                result["max_probs_delta"], float((probs_left - probs_right).abs().max())
+            )
+    return result
+
+
 @contextlib.contextmanager
 def _expert_bias_zeroed(model):
     """Temporarily remove the expert bias, to ask whether it is what the two paths disagree about.
@@ -145,60 +162,54 @@ def compare_router_paths(model, forward_once, tf_config, zero_expert_bias: bool 
 
     # Name what failed to repeat: kernel noise in the weights and a wandering routing map are
     # different problems, and "not repeatable" alone does not say which one to chase.
-    differed = []
-    if loss_ref != loss_again:
-        differed.append("loss")
-    if set(ref) != set(again):
-        differed.append("layers")
-    else:
-        if any(not torch.equal(ref[name][1], again[name][1]) for name in ref):
-            differed.append("routing")
-        if any(not torch.equal(ref[name][0], again[name][0]) for name in ref):
-            differed.append("probs")
-    repeatable = not differed
-    layers = sorted(set(ref) & set(fused_sink))
+    signal = _diff(ref, fused_sink)
+    # The same measurement between two identical settings. Everything upstream of the router is
+    # nondeterministic -- atomics in the linear-attention kernels reorder reductions, the gate sees
+    # slightly different activations, and a near-tie in a 288-expert top-k flips. That flipping is
+    # the floor this instrument can resolve: a fused-vs-unfused count at the same level as this one
+    # measures the floor, not the flag.
+    background = _diff(ref, again)
+
     report = {
-        "layers_compared": len(layers),
+        "layers_compared": len(sorted(set(ref) & set(fused_sink))),
         "loss_unfused": loss_ref,
         "loss_fused": loss_fused,
         "loss_delta": loss_fused - loss_ref,
-        "routing_differs_in_layers": [],
-        "max_abs_probs_delta": 0.0,
-        "tokens_routed_differently": 0,
+        "loss_unfused_repeat": loss_again,
+        "routing_differs_in_layers": signal["layers"],
+        "tokens_routed_differently": signal["tokens"],
+        "max_abs_probs_delta": signal["max_probs_delta"],
+        "tokens_routed_differently_between_unfused": background["tokens"],
+        "max_abs_probs_delta_between_unfused": background["max_probs_delta"],
+        "expert_bias_scale": expert_bias_scale(model),
     }
-    for name in layers:
-        probs_ref, map_ref = ref[name]
-        probs_new, map_new = fused_sink[name]
-        if map_ref.shape == map_new.shape and not torch.equal(map_ref, map_new):
-            report["routing_differs_in_layers"].append(name)
-            # One token counts once, however many of its experts changed.
-            differing = (map_ref != map_new).any(dim=-1).sum().item()
-            report["tokens_routed_differently"] += int(differing)
-        if probs_ref.shape == probs_new.shape:
-            delta = (probs_ref - probs_new).abs().max().item()
-            report["max_abs_probs_delta"] = max(report["max_abs_probs_delta"], delta)
 
-    report["expert_bias_scale"] = expert_bias_scale(model)
-    report["forward_is_repeatable"] = repeatable
-    report["loss_unfused_repeat"] = loss_again
-    report["unrepeatable_in"] = differed
-    if not repeatable:
-        report["verdict"] = (
-            f"void: a second unfused forward on the same batch differed in {', '.join(differed)}, "
-            "so no difference here can be attributed to the flag"
+    floor = background["tokens"]
+    observed = signal["tokens"]
+    if observed == 0 and floor == 0:
+        verdict = (
+            "identical: the router is not the source of the loss difference"
+            if signal["max_probs_delta"] == 0
+            else "arithmetic: same experts, different weights"
         )
-        return report
-    report["verdict"] = (
-        "semantic: the fused kernel selects different experts"
-        if report["routing_differs_in_layers"]
-        else "arithmetic: same experts, different weights"
-        if report["max_abs_probs_delta"] > 0
-        else "identical: the router is not the source of the loss difference"
-    )
-    if not report["routing_differs_in_layers"] and report["expert_bias_scale"] == 0.0:
-        # Refuse to let a degenerate run read as a clean bill of health.
-        report["verdict"] += (
-            " -- but every expert bias is zero, so selection could not have differed here whatever "
-            "the kernel does; this says nothing about a trained checkpoint"
+        if report["expert_bias_scale"] == 0.0:
+            # Refuse to let a degenerate run read as a clean bill of health.
+            verdict += (
+                " -- but every expert bias is zero, so selection could not have differed here "
+                "whatever the kernel does; this says nothing about a trained checkpoint"
+            )
+    elif floor == 0:
+        verdict = "semantic: the fused kernel selects different experts, and the unfused pair agrees"
+    elif observed <= 2 * floor:
+        verdict = (
+            f"indistinguishable: {observed} tokens re-routed against a run-to-run floor of {floor}. "
+            "The forward is nondeterministic upstream of the router, so this cannot separate the "
+            "flag from the noise; make the forward deterministic and repeat"
         )
+    else:
+        verdict = (
+            f"semantic above the floor: {observed} tokens re-routed against a run-to-run floor of "
+            f"{floor}"
+        )
+    report["verdict"] = verdict
     return report
