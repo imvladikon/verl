@@ -522,6 +522,42 @@ def _check_model_config(args) -> Result:
     return Result("checkpoint config", PASS, detail)
 
 
+@registry.add("model", "trainer flags that default on")
+def _check_trainer_defaults_taking_effect(args) -> Result:
+    """Flags whose packaged default is on, so leaving them out of the command line still selects them.
+
+    ``trainer.balance_batch`` is the one that bites: it ships as true and, until recently, the SPMD
+    trainer ignored it, so a launcher that never passed it got nothing. Now that the flag works, the
+    same launcher silently starts redistributing samples across dp ranks -- which changes a timing
+    comparison without appearing anywhere in the run's own command line.
+    """
+    name = "trainer flags that default on"
+    watched = "trainer.balance_batch"
+    module = _module("verl.trainer.sft_trainer")
+    if module is None:
+        return Result(name, SKIP, "verl.trainer.sft_trainer not importable here")
+
+    config_path = os.path.join(os.path.dirname(_source_of(module)), "config", "sft_trainer_engine.yaml")
+    if not os.path.exists(config_path):
+        return Result(name, SKIP, f"{config_path} not found")
+    import yaml
+
+    with open(config_path) as handle:
+        packaged = (yaml.safe_load(handle) or {}).get("trainer", {}).get("balance_batch")
+
+    overrides = dict(_parse_override(text) for text in (args.trainer_override or []))
+    if watched in overrides:
+        return Result(name, PASS, f"{watched}={overrides[watched]} passed explicitly")
+    if not packaged:
+        return Result(name, PASS, f"{watched} defaults to {packaged!r}, nothing takes effect unasked")
+    return Result(
+        name,
+        WARN,
+        f"{watched} is not in this run's overrides and defaults to {packaged!r}",
+        "the run will balance tokens across dp ranks without saying so; pass it explicitly "
+        "(--trainer-override trainer.balance_batch=false) when the run is a timing comparison",
+    )
+
 
 def _parse_override(text: str):
     """`key=value` as Hydra hands it, with the value typed the way a config expects it."""
@@ -1079,6 +1115,13 @@ def main() -> int:
         metavar="KEY=VALUE",
         help="an override the run passes to Megatron (repeatable). The combination is built here, "
         "so one that Megatron refuses fails in milliseconds instead of after the weights arrive.",
+    )
+    parser.add_argument(
+        "--trainer-override",
+        action="append",
+        metavar="KEY=VALUE",
+        help="a trainer override the run passes (repeatable). Used to tell a flag the run chose "
+        "apart from one it inherited from the packaged config's default.",
     )
     parser.add_argument(
         "--world-size",

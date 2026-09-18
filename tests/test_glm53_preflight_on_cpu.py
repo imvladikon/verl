@@ -47,6 +47,7 @@ def _args(**kw):
         engine=None,
         world_size=None,
         transformer_config=None,
+        trainer_override=None,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -253,3 +254,38 @@ def test_the_engine_settings_verl_applies_itself_are_included(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"text_config": {"num_hidden_layers": 4}}))
     geometry = preflight._megatron_geometry(str(tmp_path))
     assert geometry["moe_token_dispatcher_type"] == "alltoall", "a config built without it is not the run's"
+
+
+def _trainer_config(tmp_path, balance_batch):
+    """A stand-in for the packaged sft_trainer_engine.yaml, next to a stand-in trainer module."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "sft_trainer_engine.yaml").write_text(f"trainer:\n  balance_batch: {balance_batch}\n")
+    trainer = tmp_path / "sft_trainer.py"
+    trainer.write_text("")
+    return types.SimpleNamespace(__file__=str(trainer))
+
+
+@pytest.mark.parametrize(
+    "packaged, overrides, expected",
+    [
+        # The trap: the launcher says nothing and the packaged default turns it on anyway.
+        ("true", None, preflight.WARN),
+        ("true", ["trainer.balance_batch=false"], preflight.PASS),
+        ("true", ["trainer.balance_batch=true"], preflight.PASS),
+        # Nothing can be inherited unasked, so there is nothing to warn about.
+        ("false", None, preflight.PASS),
+    ],
+)
+def test_a_flag_inherited_from_the_packaged_default_is_called_out(monkeypatch, tmp_path, packaged, overrides, expected):
+    module = _trainer_config(tmp_path, packaged)
+    monkeypatch.setattr(preflight, "_module", lambda name: module)
+    monkeypatch.setattr(preflight, "_source_of", lambda obj: obj.__file__)
+
+    result = preflight._check_trainer_defaults_taking_effect(_args(trainer_override=overrides))
+    assert result.status == expected, result
+
+
+def test_the_flag_check_skips_rather_than_guesses_when_the_trainer_is_not_importable(monkeypatch):
+    monkeypatch.setattr(preflight, "_module", lambda name: None)
+    assert preflight._check_trainer_defaults_taking_effect(_args()).status == preflight.SKIP
