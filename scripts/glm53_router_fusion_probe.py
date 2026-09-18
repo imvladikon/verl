@@ -43,6 +43,23 @@ def _routers(model):
     return found
 
 
+def expert_bias_scale(model) -> float:
+    """Largest absolute expert bias in the model, which decides whether this test can see anything.
+
+    With ``moe_router_enable_expert_bias`` the reference path selects experts by ``scores + bias``
+    and weights them by ``scores`` alone. When the bias is all zeros -- an untrained or freshly
+    initialised checkpoint -- those two agree, the branch is degenerate, and the fused and unfused
+    kernels can only differ by rounding. A verdict of "arithmetic" then says nothing about a trained
+    model, where the bias is what makes the selection contestable in the first place.
+    """
+    largest = 0.0
+    for _name, router in _routers(model):
+        bias = getattr(router, "expert_bias", None)
+        if bias is not None:
+            largest = max(largest, float(bias.detach().abs().max()))
+    return largest
+
+
 def _capture(model, sink: dict):
     """Record each router's (probs, routing_map) without touching what it returns."""
     handles = []
@@ -104,6 +121,7 @@ def compare_router_paths(model, forward_once, tf_config) -> dict:
             delta = (probs_ref - probs_new).abs().max().item()
             report["max_abs_probs_delta"] = max(report["max_abs_probs_delta"], delta)
 
+    report["expert_bias_scale"] = expert_bias_scale(model)
     report["verdict"] = (
         "semantic: the fused kernel selects different experts"
         if report["routing_differs_in_layers"]
@@ -111,4 +129,10 @@ def compare_router_paths(model, forward_once, tf_config) -> dict:
         if report["max_abs_probs_delta"] > 0
         else "identical: the router is not the source of the loss difference"
     )
+    if not report["routing_differs_in_layers"] and report["expert_bias_scale"] == 0.0:
+        # Refuse to let a degenerate run read as a clean bill of health.
+        report["verdict"] += (
+            " -- but every expert bias is zero, so selection could not have differed here whatever "
+            "the kernel does; this says nothing about a trained checkpoint"
+        )
     return report
