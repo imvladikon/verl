@@ -118,12 +118,38 @@ def directory_exists(repo: str, revision: str, path: str) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def names_exported_by(module: str, repo: str, base: str, root: str, depth: int = 3) -> set[str] | None:
+def shipped_sources(paths: list[str], package: str) -> dict[str, str]:
+    """Map each further file the overlay ships to the module name it will answer to.
+
+    An overlay of several files is not several independent overlays: one of them importing another
+    resolves at runtime and is missing from the base revision, so checking them one at a time turns
+    the overlay's own contents into failures.
+
+    The module name is read off the path from the package directory down, so the file can be given
+    wherever it currently sits -- a staging directory, a worktree -- not only at its shipped path.
+    """
+    anchor = package.split(".")[0]
+    sources = {}
+    for path in paths:
+        parts = path.removesuffix(".py").split("/")
+        if anchor not in parts:
+            raise SystemExit(f"--ships {path}: no '{anchor}' directory in the path, cannot name the module")
+        module = ".".join(parts[len(parts) - 1 - parts[::-1].index(anchor) :]).removesuffix(".__init__")
+        sources[module] = open(path).read()  # noqa: SIM115
+    return sources
+
+
+def names_exported_by(
+    module: str, repo: str, base: str, root: str, shipped: dict[str, str] | None = None, depth: int = 3
+) -> set[str] | None:
     """Every name the module binds at the base revision, following `import *` re-exports.
 
     `sglang.srt.utils` is a package whose __init__ is one `from ... import *`; without following
     that, every name it re-exports looks missing.
     """
+    shipped = shipped or {}
+    if module in shipped:
+        return top_level_names(shipped[module])
     # An empty __init__.py is an empty string, not a missing file: compare against None.
     candidates = ((path, read_at(repo, base, path)) for path in module_paths(module, root))
     matched = next(((path, text) for path, text in candidates if text is not None), None)
@@ -135,11 +161,13 @@ def names_exported_by(module: str, repo: str, base: str, root: str, depth: int =
     names = top_level_names(source)
     if depth > 0:
         for reexported in star_sources(source, package):
-            names |= names_exported_by(reexported, repo, base, root, depth - 1) or set()
+            names |= names_exported_by(reexported, repo, base, root, shipped, depth - 1) or set()
     return names
 
 
-def unresolved_imports(source: str, repo: str, base: str, root: str, package: str) -> list[str]:
+def unresolved_imports(
+    source: str, repo: str, base: str, root: str, package: str, shipped: dict[str, str] | None = None
+) -> list[str]:
     """Imports the overlay makes that the base revision cannot satisfy."""
     problems = []
     for node in ast.walk(ast.parse(source)):
@@ -147,7 +175,7 @@ def unresolved_imports(source: str, repo: str, base: str, root: str, package: st
             continue
         if not node.module.startswith(package):
             continue  # third-party and stdlib come from the image's environment, not this tree
-        available = names_exported_by(node.module, repo, base, root)
+        available = names_exported_by(node.module, repo, base, root, shipped)
         if available is None:
             prefix = f"{root.rstrip('/')}/" if root else ""
             if directory_exists(repo, base, prefix + node.module.replace(".", "/")):
@@ -159,6 +187,8 @@ def unresolved_imports(source: str, repo: str, base: str, root: str, package: st
                 continue
             # `from package import submodule` resolves through the filesystem, not through names
             # bound in the package's __init__.
+            if f"{node.module}.{alias.name}" in (shipped or {}):
+                continue
             submodule = module_paths(f"{node.module}.{alias.name}", root)
             if any(read_at(repo, base, path) is not None for path in submodule):
                 continue
@@ -189,12 +219,20 @@ def main() -> int:
     parser.add_argument("--base", required=True, help="revision the image was built from")
     parser.add_argument("--root", default="", help="source root inside the repo (e.g. python for sglang)")
     parser.add_argument("--package", default="", help="only check imports from this package (default: repo name)")
+    parser.add_argument(
+        "--ships",
+        nargs="*",
+        default=[],
+        metavar="PATH",
+        help="other files this same overlay ships, so importing one of them is not a failure",
+    )
     args = parser.parse_args()
 
     source = open(args.file).read()  # noqa: SIM115
     package = args.package or args.repo.rstrip("/").rsplit("/", 1)[-1].replace("-", ".").lower()
+    shipped = shipped_sources(args.ships, package)
 
-    problems = unresolved_imports(source, args.repo, args.base, args.root, package)
+    problems = unresolved_imports(source, args.repo, args.base, args.root, package, shipped)
     risks = relocation_risks(source)
 
     for problem in problems:
