@@ -28,6 +28,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 class FP8QuantizerHelper:
     def __init__(self, quant_config):
         self.quant_config = quant_config
+        self.raise_on_quantization_error = False
 
     def should_quantize_param(self, param_name):
         """Determine whether to quantize to FP8 based on parameter name
@@ -128,5 +129,7 @@ class FP8QuantizerHelper:
 
             except Exception as e:
                 logger.error(f"Failed to quantize {k}: {e}")
+                if self.raise_on_quantization_error:
+                    raise RuntimeError(f"Failed to quantize FP8 rollout weight {k}: {e}") from e
                 # If quantization fails, use original weights
                 yield (k, v)

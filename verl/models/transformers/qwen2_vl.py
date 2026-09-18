@@ -43,11 +43,25 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
 if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
+    # `is_flash_attn_2_available()` only inspects package metadata, so a flash-attn built
+    # against a different torch ABI passes the check and then fails at import time with
+    # `undefined symbol`. Importing this module must not depend on flash-attn being usable:
+    # the functions below are only reached by the VL attention path, while SDPA/eager runs
+    # do not touch them. `verl/utils/attention_utils.py` already guards its own import the
+    # same way.
+    try:
+        from flash_attn import flash_attn_func, flash_attn_varlen_func
 
-    _flash_supports_window_size = "window_size" in inspect.signature(flash_attn_func).parameters
-    _flash_supports_deterministic = "deterministic" in inspect.signature(flash_attn_func).parameters
-    _flash_use_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
+        _flash_supports_window_size = "window_size" in inspect.signature(flash_attn_func).parameters
+        _flash_supports_deterministic = "deterministic" in inspect.signature(flash_attn_func).parameters
+        _flash_use_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
+    except ImportError as exc:
+        logger.warning("flash-attn is installed but unusable (%s); flash-attn paths are disabled", exc)
+        flash_attn_func = None
+        flash_attn_varlen_func = None
+        _flash_supports_window_size = False
+        _flash_supports_deterministic = False
+        _flash_use_top_left_mask = False
 
 if is_npu_available:
     from transformers.integrations.npu_flash_attention import npu_flash_attn_func as flash_attn_func

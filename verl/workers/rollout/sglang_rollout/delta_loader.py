@@ -148,6 +148,14 @@ def _verify_dense(model: torch.nn.Module, params: list[dict], values: torch.Tens
             _apply_dense(model, [p], values)
         finally:
             torch.Tensor.copy_ = orig_copy
+        if not touched:
+            _VERIFY_STATS["params"] = 0
+            _VERIFY_STATS["pieces"] = []
+            _VERIFY_STATS.pop("by_param", None)
+            raise RuntimeError(
+                "delta state verification could not resolve any copy_ destination "
+                f"for {p['name']!r}; refusing to treat an unobserved/no-op load as parity"
+            )
         bad = 0
         for dst, pre in touched.values():
             if dst.is_floating_point() and dst.element_size() == 2:

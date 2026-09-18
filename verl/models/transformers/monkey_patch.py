@@ -317,6 +317,12 @@ def apply_monkey_patch(
         tiled_mlp_shards: Number of shards for TiledMLP (higher = lower memory, slightly slower).
     """
 
+    if getattr(model.config, "model_type", None) in {"glm5_next", "glm5_next_text"}:
+        from verl.models.transformers.glm5_next import patch_glm5_next_eager_kda
+
+        if patch_glm5_next_eager_kda(model):
+            print("Patched the GLM-5.3-Flash eager KDA fallback for finite gradients.")
+
     # Apply TiledMLP monkey patch for memory-efficient MLP computation
     if use_tiled_mlp:
         from verl.models.transformers.tiled_mlp import apply_tiled_mlp_monkey_patch
