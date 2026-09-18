@@ -104,12 +104,23 @@ def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["temperature"] = 0
 
 
-def validation_budget_metrics(scores, response_lengths, budget: int) -> dict[str, float]:
+def validation_budget_metrics(
+    scores, response_lengths, budget: int, data_sources=None, accuracies=None
+) -> dict[str, float]:
     """Split a validation score into "did it finish" and "was it right when it finished".
 
     A response cut off at the budget scores like a wrong one, so the blended mean moves when the
     policy only changes how long it thinks. Reporting the two factors separately keeps a shift in
     reasoning length from reading as a change in accuracy.
+
+    ``accuracies`` matters because accuracy, not score, is what a checkpoint is compared against:
+    without it a model that got longer and a model that got worse look the same, and the comparison
+    cannot say which happened. Given per-source labels the split is reported per source too, since
+    one dataset's reasoning length can move while another's does not.
+
+    "Truncated" here means the response reached the budget, which is a slightly wider set than
+    "produced no final answer" -- a few responses finish exactly at the cap. That keeps the metric
+    independent of how any particular reward decides an answer was given.
     """
     if not len(scores) or not len(response_lengths) or budget <= 0:
         return {}
@@ -125,6 +136,21 @@ def validation_budget_metrics(scores, response_lengths, budget: int) -> dict[str
     }
     if (~truncated).any():
         metrics["val-aux/score_among_untruncated"] = float(scores[~truncated].mean())
+
+    accuracies = np.asarray(accuracies, dtype=float) if accuracies is not None else None
+    if accuracies is not None and len(accuracies) == len(scores) and (~truncated).any():
+        metrics["val-aux/acc_among_untruncated"] = float(accuracies[~truncated].mean())
+
+    if data_sources is not None and len(data_sources) == len(scores):
+        for source in dict.fromkeys(data_sources):  # stable order, one entry per source
+            rows = np.asarray([item == source for item in data_sources])
+            kept = rows & ~truncated
+            metrics[f"val-aux/{source}/truncated_ratio"] = float(truncated[rows].mean())
+            metrics[f"val-aux/{source}/response_length/mean"] = float(lengths[rows].mean())
+            if kept.any():
+                metrics[f"val-aux/{source}/score_among_untruncated"] = float(scores[kept].mean())
+                if accuracies is not None and len(accuracies) == len(scores):
+                    metrics[f"val-aux/{source}/acc_among_untruncated"] = float(accuracies[kept].mean())
     return metrics
 
 
@@ -1228,6 +1254,8 @@ class PPOTrainer(ABC):
                 sample_scores,
                 sample_response_lengths,
                 int(self.config.actor_rollout_ref.rollout.response_length),
+                data_sources=data_sources,
+                accuracies=reward_extra_infos_dict.get("acc"),
             )
         )
         failed_prompts = submitted_prompts - returned_prompts
