@@ -82,23 +82,33 @@ def compare_router_paths(model, forward_once, tf_config) -> dict:
         tf_config: the TransformerConfig the routers read ``moe_router_fusion`` from.
     """
     original = tf_config.moe_router_fusion
-    results = {}
+
+    def one_pass(fused: bool):
+        tf_config.moe_router_fusion = fused
+        sink: dict = {}
+        handles = _capture(model, sink)
+        try:
+            with torch.no_grad():
+                loss = forward_once()
+        finally:
+            for handle in handles:
+                handle.remove()
+        return float(loss), sink
+
     try:
-        for fused in (False, True):
-            tf_config.moe_router_fusion = fused
-            sink: dict = {}
-            handles = _capture(model, sink)
-            try:
-                with torch.no_grad():
-                    loss = forward_once()
-            finally:
-                for handle in handles:
-                    handle.remove()
-            results[fused] = (float(loss), sink)
+        # Unfused twice, around the fused pass. The repeat is the control: if a second forward on
+        # the same batch does not reproduce the first, nothing downstream separates "the flag
+        # changed the answer" from "the forward is not repeatable", and the comparison is void.
+        loss_ref, ref = one_pass(False)
+        loss_fused, fused_sink = one_pass(True)
+        loss_again, again = one_pass(False)
     finally:
         tf_config.moe_router_fusion = original
 
-    (loss_ref, ref), (loss_fused, fused_sink) = results[False], results[True]
+    repeatable = loss_ref == loss_again and set(ref) == set(again) and all(
+        torch.equal(ref[name][0], again[name][0]) and torch.equal(ref[name][1], again[name][1])
+        for name in ref
+    )
     layers = sorted(set(ref) & set(fused_sink))
     report = {
         "layers_compared": len(layers),
@@ -122,6 +132,14 @@ def compare_router_paths(model, forward_once, tf_config) -> dict:
             report["max_abs_probs_delta"] = max(report["max_abs_probs_delta"], delta)
 
     report["expert_bias_scale"] = expert_bias_scale(model)
+    report["forward_is_repeatable"] = repeatable
+    report["loss_unfused_repeat"] = loss_again
+    if not repeatable:
+        report["verdict"] = (
+            "void: a second unfused forward on the same batch did not reproduce the first, so no "
+            "difference here can be attributed to the flag"
+        )
+        return report
     report["verdict"] = (
         "semantic: the fused kernel selects different experts"
         if report["routing_differs_in_layers"]
