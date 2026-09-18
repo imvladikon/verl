@@ -129,8 +129,13 @@ def compare_router_paths(model, forward_once, tf_config, zero_expert_bias: bool 
         return float(loss), sink
 
     try:
-        # Unfused twice, around the fused pass. The repeat is the control: if a second forward on
-        # the same batch does not reproduce the first, nothing downstream separates "the flag
+        # A discarded pass first: the first forward after the model is built pays one-off costs --
+        # kernel autotuning, lazy compilation, cache fills -- that make it differ from every later
+        # one. Capturing it would read as "the forward is not repeatable" when only its first
+        # instance was special.
+        one_pass(False)
+        # Then unfused twice, around the fused pass. The repeat is the control: if a second forward
+        # on the same batch does not reproduce the first, nothing downstream separates "the flag
         # changed the answer" from "the forward is not repeatable", and the comparison is void.
         loss_ref, ref = one_pass(False)
         loss_fused, fused_sink = one_pass(True)
@@ -138,10 +143,19 @@ def compare_router_paths(model, forward_once, tf_config, zero_expert_bias: bool 
     finally:
         tf_config.moe_router_fusion = original
 
-    repeatable = loss_ref == loss_again and set(ref) == set(again) and all(
-        torch.equal(ref[name][0], again[name][0]) and torch.equal(ref[name][1], again[name][1])
-        for name in ref
-    )
+    # Name what failed to repeat: kernel noise in the weights and a wandering routing map are
+    # different problems, and "not repeatable" alone does not say which one to chase.
+    differed = []
+    if loss_ref != loss_again:
+        differed.append("loss")
+    if set(ref) != set(again):
+        differed.append("layers")
+    else:
+        if any(not torch.equal(ref[name][1], again[name][1]) for name in ref):
+            differed.append("routing")
+        if any(not torch.equal(ref[name][0], again[name][0]) for name in ref):
+            differed.append("probs")
+    repeatable = not differed
     layers = sorted(set(ref) & set(fused_sink))
     report = {
         "layers_compared": len(layers),
@@ -167,10 +181,11 @@ def compare_router_paths(model, forward_once, tf_config, zero_expert_bias: bool 
     report["expert_bias_scale"] = expert_bias_scale(model)
     report["forward_is_repeatable"] = repeatable
     report["loss_unfused_repeat"] = loss_again
+    report["unrepeatable_in"] = differed
     if not repeatable:
         report["verdict"] = (
-            "void: a second unfused forward on the same batch did not reproduce the first, so no "
-            "difference here can be attributed to the flag"
+            f"void: a second unfused forward on the same batch differed in {', '.join(differed)}, "
+            "so no difference here can be attributed to the flag"
         )
         return report
     report["verdict"] = (
