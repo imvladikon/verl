@@ -38,6 +38,7 @@ from verl.utils.dataset.dataset_utils import SFTTensorCollator
 from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
 from verl.utils.device import auto_set_device, get_device_name
 from verl.utils.distributed import destroy_global_process_group
+from verl.utils.dp_balance import balance_batch_across_dp
 from verl.utils.logger import log_with_rank
 from verl.utils.memory_utils import aggressive_empty_cache
 from verl.utils.profiler import log_gpu_memory_usage, marked_timer
@@ -76,6 +77,17 @@ class SFTTrainer:
         self.resume_global_step = self.ckpt_handler.load_checkpoint()
 
         self.device_name = self.config.trainer.device
+
+        # trainer.balance_batch has existed in this config since before the SPMD trainer did, and
+        # only the Ray trainers honoured it: on this path it silently did nothing.
+        self.balance_batch = bool(self.config.trainer.get("balance_batch", False))
+        log_with_rank(
+            f"dp token balancing {'on' if self.balance_batch else 'off'} "
+            f"(trainer.balance_batch), dp size {self.engine.get_data_parallel_size()}",
+            rank=self.rank,
+            logger=logger,
+            log_only_rank_0=True,
+        )
 
         if self.rank == 0:
             print(self.config)
@@ -330,7 +342,7 @@ class SFTTrainer:
         batch_seqlens = output_tensor.tolist()
         return batch_seqlens
 
-    def _dp_imbalance_metrics(self, batch_seqlens: list[int]) -> dict[str, float]:
+    def _dp_imbalance_metrics(self, batch_seqlens: list[int], prefix: str = "dp") -> dict[str, float]:
         """How unevenly this step's tokens fell across data-parallel ranks.
 
         The sampler hands every rank the same number of samples, not the same number of tokens, and
@@ -349,10 +361,10 @@ class SFTTrainer:
         # Attention is quadratic in sequence length, so equal token counts are not equal work.
         workload = calculate_workload(seqlens.reshape(-1)).view(dp_size, -1).sum(dim=1).double()
         return {
-            "train/dp_tokens_max": tokens.max().item(),
-            "train/dp_tokens_min": tokens.min().item(),
-            "train/dp_tokens_max_over_mean": (tokens.max() / tokens.mean()).item(),
-            "train/dp_workload_max_over_mean": (workload.max() / workload.mean()).item(),
+            f"train/{prefix}_tokens_max": tokens.max().item(),
+            f"train/{prefix}_tokens_min": tokens.min().item(),
+            f"train/{prefix}_tokens_max_over_mean": (tokens.max() / tokens.mean()).item(),
+            f"train/{prefix}_workload_max_over_mean": (workload.max() / workload.mean()).item(),
         }
 
     def fit(self):
@@ -428,6 +440,19 @@ class SFTTrainer:
                 # construct tensordict
                 data = tu.get_tensordict(tensor_dict=data, non_tensor_dict=meta_info)
                 batch_seqlens = self._get_batch_seqlens(data=data)
+                imbalance = self._dp_imbalance_metrics(batch_seqlens)
+                if self.balance_batch:
+                    data = balance_batch_across_dp(
+                        data,
+                        batch_seqlens,
+                        dp_group=self.engine.get_data_parallel_group(),
+                        dp_size=self.engine.get_data_parallel_size(),
+                        device=self.device_name,
+                    )
+                    # Re-read rather than permute the old list: this is also the check that the
+                    # exchange returned what was asked for, and it is one all-gather of B integers.
+                    batch_seqlens = self._get_batch_seqlens(data=data)
+                    imbalance |= self._dp_imbalance_metrics(batch_seqlens, prefix="dp_balanced")
                 # this is necessary. Otherwise, it is interpreted as NonTensorStack
                 batch_seqlens_ntd = NonTensorData(batch_seqlens)
 
@@ -461,7 +486,7 @@ class SFTTrainer:
                     ).item()
                     total_tokens += metrics["train/global_tokens"]
                     metrics["train/total_tokens(B)"] = total_tokens / 1e9
-                    metrics.update(self._dp_imbalance_metrics(batch_seqlens))
+                    metrics.update(imbalance)
 
                     if self.engine.get_data_parallel_rank() == 0:
                         tracking.log(data=metrics, step=global_step)

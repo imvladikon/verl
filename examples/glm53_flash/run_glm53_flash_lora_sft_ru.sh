@@ -35,6 +35,10 @@ tp=${TP:-1}
 ep=${EP:-1}
 etp=${ETP:-}
 max_token_len_per_gpu=${MAX_TOKEN_LEN_PER_GPU:-8192}
+# Off unless asked for: the config's own default is true, and a step that silently starts
+# redistributing samples across dp ranks is not something a timing comparison can absorb.
+# train/dp_tokens_max_over_mean says whether turning it on is worth anything.
+balance_batch=${BALANCE_BATCH:-false}
 rank=${LORA_RANK:-32}
 alpha=${LORA_ALPHA:-64}
 lr=${LR:-1e-4}
@@ -106,6 +110,7 @@ mkdir -p "${output_dir}"
   optim.clip_grad=1.0 \
   checkpoint.save_contents='["model","optimizer","extra"]' \
   checkpoint.save_lora_only=true \
+  trainer.balance_batch="${balance_batch}" \
   trainer.total_epochs="${epochs}" \
   trainer.total_training_steps="${steps}" \
   trainer.n_gpus_per_node="${nproc}" \
