@@ -14,13 +14,44 @@
 """PEFT configuration of Megatron for verl."""
 
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+# What the adapter says about itself, and where a checkpoint keeps it. `adapter_path` points at the
+# weights the run loads, which on the Megatron path is the torch_dist shard directory -- the claim
+# lives beside it, not in it, so looking only inside makes the check a no-op exactly where it is
+# needed. Both files spell the fields the same way (`r`, `lora_alpha`), so one reader covers them.
+_CLAIM_LOCATIONS = (
+    ("adapter_config.json",),  # an HF adapter directory, given directly
+    ("..", "huggingface", "adapter", "adapter_config.json"),  # given <ckpt>/model/dist_ckpt
+    ("model", "huggingface", "adapter", "adapter_config.json"),  # given the checkpoint root
+    ("lora_train_meta.json",),  # the checkpoint root's own record
+    ("..", "..", "lora_train_meta.json"),  # again from <ckpt>/model/dist_ckpt
+    ("..", "lora_train_meta.json"),  # from <ckpt>/model
+)
 
 
 def _adapter_path_of(model_config) -> str | None:
     """Where the adapter being resumed lives, from whichever block carries it."""
     lora_cfg = getattr(model_config, "lora", None) or {}
     return lora_cfg.get("adapter_path", None) or getattr(model_config, "lora_adapter_path", None)
+
+
+def adapter_claim(adapter_path: str) -> tuple[str, dict] | None:
+    """The first record of what this adapter was trained with, and where it was found."""
+    base = os.path.expanduser(str(adapter_path))
+    for parts in _CLAIM_LOCATIONS:
+        candidate = os.path.normpath(os.path.join(base, *parts))
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as handle:
+                return candidate, json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning("Cannot read the LoRA record at %s: %s", candidate, error)
+    return None
 
 
 def check_adapter_matches_config(model_config, rank: int, alpha: int) -> None:
@@ -37,11 +68,17 @@ def check_adapter_matches_config(model_config, rank: int, alpha: int) -> None:
     adapter_path = _adapter_path_of(model_config)
     if not adapter_path:
         return
-    config_path = os.path.join(os.path.expanduser(str(adapter_path)), "adapter_config.json")
-    if not os.path.exists(config_path):
-        return  # a bare weights directory carries no claim to check against
-    with open(config_path, encoding="utf-8") as handle:
-        saved = json.load(handle)
+    found = adapter_claim(adapter_path)
+    if found is None:
+        # Worth saying out loud: the run is resuming an adapter that records nothing about how it
+        # was trained, so a rescaling mismatch here stays undetectable.
+        logger.warning(
+            "No adapter_config.json or lora_train_meta.json found for %s, so this run's LoRA "
+            "rank/alpha cannot be checked against the adapter's own.",
+            adapter_path,
+        )
+        return
+    config_path, saved = found
 
     mismatched = {
         name: (theirs, ours)
