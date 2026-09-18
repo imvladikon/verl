@@ -573,11 +573,28 @@ def _megatron_geometry(model_path: str | None) -> dict:
     # Megatron asserts bias-free MoE whenever expert tensor parallel is above one, so the flag
     # decides whether an ETP>1 plan is legal at all.
     geometry["add_bias_linear"] = bool(text.get("attention_bias", False))
-    # verl sets these on the Megatron engine itself rather than through the command line, so a
-    # check that only reads the command line judges a configuration the run never uses: the
-    # shared-expert overlap, for one, is refused unless the dispatcher is alltoall.
-    geometry.setdefault("moe_token_dispatcher_type", "alltoall")
+    geometry.update(_verl_engine_defaults())
     return {key: value for key, value in geometry.items() if value is not None}
+
+
+def _verl_engine_defaults() -> dict:
+    """What verl puts on the provider itself, from ``transformer_impl.py`` ``provider_overrides``.
+
+    None of these reach the command line, so a check that reads only the command line judges a
+    configuration the run never uses. The shared-expert overlap is refused without an alltoall
+    dispatcher, and the router fusion has to agree with the load-balancing type -- both would be
+    decided here on values the caller never typed.
+    """
+    defaults = {
+        "moe_token_dispatcher_type": "alltoall",
+        "moe_router_load_balancing_type": "none",
+        "variable_seq_lengths": True,
+        "batch_p2p_comm": False,
+    }
+    enums = _module("megatron.core.transformer.enums")
+    if enums is not None and hasattr(enums, "AttnBackend"):
+        defaults["attention_backend"] = enums.AttnBackend.flash
+    return defaults
 
 
 @registry.add("model", "transformer config accepts the overrides")

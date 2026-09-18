@@ -242,3 +242,14 @@ def test_geometry_comes_from_the_checkpoint_config(tmp_path):
 def test_the_check_skips_when_no_override_is_given():
     (result,) = [r for r in preflight.run(_args(group=["model"])) if "transformer config" in r.name]
     assert result.status == preflight.SKIP
+
+
+def test_the_engine_settings_verl_applies_itself_are_included(tmp_path):
+    """The command line does not carry them, and they decide whether other flags are legal."""
+    defaults = preflight._verl_engine_defaults()
+    assert defaults["moe_token_dispatcher_type"] == "alltoall"
+    assert defaults["moe_router_load_balancing_type"] == "none"
+
+    (tmp_path / "config.json").write_text(json.dumps({"text_config": {"num_hidden_layers": 4}}))
+    geometry = preflight._megatron_geometry(str(tmp_path))
+    assert geometry["moe_token_dispatcher_type"] == "alltoall", "a config built without it is not the run's"
