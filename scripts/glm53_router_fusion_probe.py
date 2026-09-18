@@ -30,6 +30,8 @@ TransformerConfig the routers read. Everything else is the caller's harness.
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 
 
@@ -73,14 +75,45 @@ def _capture(model, sink: dict):
     return handles
 
 
-def compare_router_paths(model, forward_once, tf_config) -> dict:
+@contextlib.contextmanager
+def _expert_bias_zeroed(model):
+    """Temporarily remove the expert bias, to ask whether it is what the two paths disagree about.
+
+    The reference selects experts by ``scores + bias`` and weights them by ``scores``; a kernel that
+    applies the bias differently, or not at all, diverges in the selection itself. Zeroing the bias
+    makes both formulas the same, so routing that still differs afterwards differs for some other
+    reason -- the score function, the pre-softmax flag, or tie-breaking.
+    """
+    saved = []
+    try:
+        for _name, router in _routers(model):
+            bias = getattr(router, "expert_bias", None)
+            if bias is not None:
+                saved.append((bias, bias.detach().clone()))
+                bias.detach().zero_()
+        yield
+    finally:
+        for bias, original in saved:
+            bias.detach().copy_(original)
+
+
+def compare_router_paths(model, forward_once, tf_config, zero_expert_bias: bool = False) -> dict:
     """Run the batch twice, fused and unfused, and report where the two disagree.
 
     Args:
         model: the built model (or the vpp list), used only to find the routers.
         forward_once: zero-argument callable running one forward on the batch, returning the loss.
         tf_config: the TransformerConfig the routers read ``moe_router_fusion`` from.
+        zero_expert_bias: run with the expert bias zeroed, to attribute a routing difference to the
+            bias rather than merely observe it. Run it both ways: routing that agrees only with the
+            bias gone says the kernels disagree about the bias.
     """
+    if zero_expert_bias:
+        with _expert_bias_zeroed(model):
+            report = compare_router_paths(model, forward_once, tf_config)
+        report["expert_bias_zeroed"] = True
+        return report
+
     original = tf_config.moe_router_fusion
 
     def one_pass(fused: bool):
