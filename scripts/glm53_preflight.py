@@ -522,6 +522,101 @@ def _check_model_config(args) -> Result:
     return Result("checkpoint config", PASS, detail)
 
 
+
+def _parse_override(text: str):
+    """`key=value` as Hydra hands it, with the value typed the way a config expects it."""
+    key, _, raw = text.partition("=")
+    lowered = raw.strip().lower()
+    if lowered in ("true", "false"):
+        return key.strip(), lowered == "true"
+    if lowered in ("null", "none", ""):
+        return key.strip(), None
+    try:
+        return key.strip(), int(raw)
+    except ValueError:
+        pass
+    try:
+        return key.strip(), float(raw)
+    except ValueError:
+        return key.strip(), raw.strip()
+
+
+def _megatron_geometry(model_path: str | None) -> dict:
+    """Enough of the model's shape for the validators that care about it.
+
+    Read from config.json, so this costs nothing: the combinations that fail validation fail on
+    parallelism and feature flags, not on exact layer counts.
+    """
+    if not model_path:
+        return {"num_layers": 2, "hidden_size": 1024, "num_attention_heads": 8}
+    try:
+        with open(os.path.join(model_path, "config.json")) as handle:
+            config = json.load(handle)
+    except Exception as error:
+        _ERRORS["model config"] = _describe_error(error)
+        return {"num_layers": 2, "hidden_size": 1024, "num_attention_heads": 8}
+    text = config.get("text_config", config)
+    geometry = {
+        "num_layers": text.get("num_hidden_layers", 2),
+        "hidden_size": text.get("hidden_size", 1024),
+        "num_attention_heads": text.get("num_attention_heads", 8),
+    }
+    if text.get("n_routed_experts"):
+        shared = text.get("n_shared_experts") or 0
+        moe_ffn = text.get("moe_intermediate_size")
+        geometry.update(
+            num_moe_experts=text["n_routed_experts"],
+            moe_router_topk=text.get("num_experts_per_tok", 8),
+            moe_ffn_hidden_size=moe_ffn,
+            moe_shared_expert_intermediate_size=(shared * moe_ffn) if (shared and moe_ffn) else None,
+        )
+    # Megatron asserts bias-free MoE whenever expert tensor parallel is above one, so the flag
+    # decides whether an ETP>1 plan is legal at all.
+    geometry["add_bias_linear"] = bool(text.get("attention_bias", False))
+    # verl sets these on the Megatron engine itself rather than through the command line, so a
+    # check that only reads the command line judges a configuration the run never uses: the
+    # shared-expert overlap, for one, is refused unless the dispatcher is alltoall.
+    geometry.setdefault("moe_token_dispatcher_type", "alltoall")
+    return {key: value for key, value in geometry.items() if value is not None}
+
+
+@registry.add("model", "transformer config accepts the overrides")
+def _check_transformer_config(args) -> Result:
+    """Build the config the run will build, before anything expensive happens.
+
+    A combination that Megatron refuses -- expert tensor parallelism with bias in the MoE, a fusion
+    whose kernels the installed TE does not carry -- is refused inside the job, after the weights
+    have been fetched. The same refusal costs milliseconds here.
+    """
+    name = "transformer config accepts the overrides"
+    overrides = getattr(args, "transformer_config", None)
+    if not overrides:
+        return Result(name, SKIP, "pass --transformer-config key=value to check a combination")
+    module = _module("megatron.core.transformer.transformer_config")
+    if module is None:
+        reason = _why("megatron.core.transformer.transformer_config")
+        return Result(name, FAIL, f"megatron.core not importable{reason}")
+    torch = _module("torch")
+
+    kwargs = _megatron_geometry(getattr(args, "model", None))
+    if torch is not None:
+        kwargs.setdefault("params_dtype", torch.bfloat16)
+        kwargs.setdefault("bf16", True)
+    kwargs.update(dict(_parse_override(item) for item in overrides))
+    described = ", ".join(f"{key}={kwargs[key]}" for key, _ in map(_parse_override, overrides))
+    try:
+        module.TransformerConfig(**kwargs)
+    except Exception as error:
+        return Result(
+            name,
+            FAIL,
+            f"{described}: {_describe_error(error)[:220]}",
+            "Megatron refuses this combination; it would refuse it inside the job as well, after "
+            "the checkpoint download",
+        )
+    return Result(name, PASS, described or "no overrides")
+
+
 @registry.add("model", "multimodal processor")
 def _check_processor(args) -> Result:
     if not args.model:
@@ -961,6 +1056,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", help="HF checkpoint directory to check and to resolve backends for")
     parser.add_argument("--kernels", action="store_true", help="run the GPU kernel probes (slower)")
+    parser.add_argument(
+        "--transformer-config",
+        action="append",
+        metavar="KEY=VALUE",
+        help="an override the run passes to Megatron (repeatable). The combination is built here, "
+        "so one that Megatron refuses fails in milliseconds instead of after the weights arrive.",
+    )
     parser.add_argument(
         "--world-size",
         type=int,

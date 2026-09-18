@@ -46,6 +46,7 @@ def _args(**kw):
         allow_fail=None,
         engine=None,
         world_size=None,
+        transformer_config=None,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -200,3 +201,44 @@ def test_unpinned_autotune_is_fatal_only_with_more_than_one_rank(monkeypatch):
     many = preflight._check_fla_autotune(_args(world_size=32))
     assert many.status == preflight.FAIL, "ranks that autotune apart can disagree on collective shapes"
     assert "world_size=32" in many.detail
+
+
+def test_overrides_are_parsed_with_the_types_a_config_expects():
+    assert preflight._parse_override("moe_permute_fusion=true") == ("moe_permute_fusion", True)
+    assert preflight._parse_override("expert_model_parallel_size=4") == ("expert_model_parallel_size", 4)
+    assert preflight._parse_override("moe_aux_loss_coeff=0.001") == ("moe_aux_loss_coeff", 0.001)
+    assert preflight._parse_override("recompute_method=null") == ("recompute_method", None)
+    assert preflight._parse_override("moe_token_dispatcher_type=alltoall") == (
+        "moe_token_dispatcher_type",
+        "alltoall",
+    )
+
+
+def test_geometry_comes_from_the_checkpoint_config(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "text_config": {
+                    "num_hidden_layers": 24,
+                    "hidden_size": 1536,
+                    "num_attention_heads": 16,
+                    "n_routed_experts": 128,
+                    "n_shared_experts": 1,
+                    "moe_intermediate_size": 512,
+                    "num_experts_per_tok": 8,
+                    "attention_bias": False,
+                }
+            }
+        )
+    )
+    geometry = preflight._megatron_geometry(str(tmp_path))
+    assert geometry["num_layers"] == 24
+    assert geometry["num_moe_experts"] == 128
+    assert geometry["moe_shared_expert_intermediate_size"] == 512
+    # ETP>1 is only legal without bias in the MoE, so this flag decides whether a plan is legal.
+    assert geometry["add_bias_linear"] is False
+
+
+def test_the_check_skips_when_no_override_is_given():
+    (result,) = [r for r in preflight.run(_args(group=["model"])) if "transformer config" in r.name]
+    assert result.status == preflight.SKIP
