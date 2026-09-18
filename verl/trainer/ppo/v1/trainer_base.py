@@ -445,6 +445,7 @@ class PPOTrainer(ABC):
             project_name=self.config.trainer.project_name,
             experiment_name=self.config.trainer.experiment_name,
         )
+        self._warned_val_generations_dropped = False
         self.dapo_filtered_reward_logger = DapoFilteredRewardTableLogger(
             project_name=self.config.trainer.project_name,
             experiment_name=self.config.trainer.experiment_name,
@@ -1260,8 +1261,20 @@ class PPOTrainer(ABC):
         # Take first N samples after shuffling
         samples = samples[:generations_to_log]
 
-        # Log to each configured logger
-        self.validation_generations_logger.log(self.config.trainer.logger, samples, self.global_steps)
+        # Every renderer these have is a table, so a run whose only backend is the console asks for
+        # samples and is handed nothing. Say it once, and name the path that works without a table.
+        rendered = self.validation_generations_logger.log(
+            self.config.trainer.logger, samples, self.global_steps
+        )
+        if rendered == 0 and not self._warned_val_generations_dropped:
+            self._warned_val_generations_dropped = True
+            logger.warning(
+                "trainer.log_val_generations=%s, but no configured backend in %s can render them: "
+                "they are only shown as a table, so the samples are being dropped. Set "
+                "trainer.validation_data_dir to write them as JSONL instead.",
+                generations_to_log,
+                list(self.config.trainer.logger),
+            )
 
     @staticmethod
     def _write_generations(inputs, outputs, gts, scores, reward_extra_infos_dict, dump_path, global_steps):

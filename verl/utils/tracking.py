@@ -665,23 +665,27 @@ class ValidationGenerationsLogger:
     project_name: str = None
     experiment_name: str = None
 
-    def log(self, loggers, samples, step):
-        if "wandb" in loggers:
-            self.log_generations_to_wandb(samples, step)
-        if "swanlab" in loggers:
-            self.log_generations_to_swanlab(samples, step)
-        if "mlflow" in loggers:
-            self.log_generations_to_mlflow(samples, step)
-        if "trackio" in loggers:
-            self.log_generations_to_trackio(samples, step)
+    def log(self, loggers, samples, step) -> int:
+        """Render the samples wherever it can, and report how many backends took them.
 
-        if "clearml" in loggers:
-            self.log_generations_to_clearml(samples, step)
-        if "tensorboard" in loggers:
-            self.log_generations_to_tensorboard(samples, step)
-
-        if "vemlp_wandb" in loggers:
-            self.log_generations_to_vemlp_wandb(samples, step)
+        Every renderer here is a table, so a run configured with only the console gets nothing.
+        Returning the count lets the caller say that out loud instead of dropping the samples it
+        was explicitly asked to produce.
+        """
+        rendered = 0
+        for backend, render in (
+            ("wandb", self.log_generations_to_wandb),
+            ("swanlab", self.log_generations_to_swanlab),
+            ("mlflow", self.log_generations_to_mlflow),
+            ("trackio", self.log_generations_to_trackio),
+            ("clearml", self.log_generations_to_clearml),
+            ("tensorboard", self.log_generations_to_tensorboard),
+            ("vemlp_wandb", self.log_generations_to_vemlp_wandb),
+        ):
+            if backend in loggers:
+                render(samples, step)
+                rendered += 1
+        return rendered
 
     def log_generations_to_vemlp_wandb(self, samples, step):
         from volcengine_ml_platform import wandb as vemlp_wandb
