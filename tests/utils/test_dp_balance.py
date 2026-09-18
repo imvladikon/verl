@@ -28,6 +28,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
+from verl.utils import tensordict_utils as tu
 from verl.utils.dp_balance import balance_batch_across_dp, partition_for_dp
 from verl.utils.tensordict_utils import get_tensordict, nested_tensor_from_tensor_list
 
@@ -44,7 +45,11 @@ def _make_batch(lengths, rope_dim=0):
         columns["position_ids"] = nested_tensor_from_tensor_list(
             [torch.arange(length).repeat(rope_dim, 1) for length in lengths], ragged_idx=2
         )
-    return get_tensordict(columns)
+    batch = get_tensordict(columns)
+    # A per-sample non-tensor column: indexing this one element-wise is what turned a balanced step
+    # into twelve minutes of 100% CPU, so it has to travel with its sample here.
+    tu.assign_non_tensor_stack(batch, "sample_tag", [f"len{length}" for length in lengths])
+    return batch
 
 
 # Lengths per rank, deliberately lopsided: rank 0 carries far more than rank 3.
@@ -65,7 +70,12 @@ def _worker(rank, world_size, rope_dim, result_queue):
         for i in range(balanced.batch_size[0]):
             ids = balanced["input_ids"][i]
             mask = balanced["loss_mask"][i]
-            row = {"length": ids.shape[0], "id_value": int(ids[0]), "mask_value": int(mask[0])}
+            row = {
+                "length": ids.shape[0],
+                "id_value": int(ids[0]),
+                "mask_value": int(mask[0]),
+                "tag": str(balanced["sample_tag"][i]),
+            }
             if rope_dim:
                 position_ids = balanced["position_ids"][i]
                 row["position_shape"] = tuple(position_ids.shape)
@@ -135,6 +145,8 @@ def test_every_sample_survives_the_exchange_with_its_own_columns(rope_dim):
         # paired columns from different samples shows up here.
         assert row["id_value"] == row["length"], row
         assert row["mask_value"] == row["length"], row
+        # The non-tensor column must have moved with its sample, not stayed behind.
+        assert row["tag"] == f"len{row['length']}", row
         if rope_dim:
             assert row["position_shape"] == (rope_dim, row["length"]), row
             assert row["position_last"] == row["length"] - 1, row

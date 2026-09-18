@@ -37,12 +37,8 @@ import torch
 import torch.distributed as dist
 from tensordict import TensorDict
 
+from verl.utils import tensordict_utils as tu
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions
-from verl.utils.tensordict_utils import nested_tensor_from_tensor_list
-
-# A column that is one value for the whole batch rather than one per sample: replicated metadata,
-# carried across unchanged the way index_select_tensor_dict carries it.
-_SHARED = object()
 
 
 def partition_for_dp(seqlens: list[int], dp_size: int) -> list[list[int]]:
@@ -54,50 +50,7 @@ def partition_for_dp(seqlens: list[int], dp_size: int) -> list[list[int]]:
     return get_seqlen_balanced_partitions(workloads, k_partitions=dp_size, equal_size=True)
 
 
-def _split_columns(data: TensorDict) -> tuple[dict, dict]:
-    """Per-sample entries for every column, plus how to put each column back together.
-
-    The layout has to be recorded rather than inferred on the way back: a ragged column's ragged
-    dimension is not recoverable from its samples (a multimodal ``position_ids`` is ``(4, seqlen)``,
-    ragged in dim 2), and inferring it wrong misaligns a sample's tokens against its mask silently.
-    """
-    layout, columns = {}, {}
-    for key, value in data.items():
-        if isinstance(value, torch.Tensor) and value.is_nested:
-            layout[key] = getattr(value, "_ragged_idx", value.dim() - 1)
-            columns[key] = [part.cpu() for part in value.unbind()]
-        elif isinstance(value, torch.Tensor):
-            layout[key] = None
-            columns[key] = [part.cpu() for part in value]
-        elif getattr(value, "shape", None):
-            layout[key] = "non_tensor"
-            columns[key] = list(value)
-        else:
-            layout[key] = _SHARED
-            columns[key] = value
-    return layout, columns
-
-
-def _rebuild(layout: dict, samples: list[dict], shared: dict) -> TensorDict:
-    """The inverse of :func:`_split_columns`, for one rank's selected samples."""
-    data = {}
-    for key, kind in layout.items():
-        if kind is _SHARED:
-            data[key] = shared[key]
-        elif kind is None:
-            data[key] = torch.stack([sample[key] for sample in samples])
-        elif kind == "non_tensor":
-            from tensordict.tensorclass import NonTensorStack
-
-            data[key] = NonTensorStack(*[sample[key] for sample in samples])
-        else:
-            data[key] = nested_tensor_from_tensor_list([sample[key] for sample in samples], ragged_idx=kind)
-    return TensorDict(source=data, batch_size=len(samples))
-
-
-def balance_batch_across_dp(
-    data: TensorDict, seqlens: list[int], dp_group, dp_size: int, device=None
-) -> TensorDict:
+def balance_batch_across_dp(data: TensorDict, seqlens: list[int], dp_group, dp_size: int, device=None) -> TensorDict:
     """Re-deal the step's samples so every rank carries a comparable amount of work.
 
     ``seqlens`` is the global, rank-ordered sequence-length list that the trainer already
@@ -124,15 +77,12 @@ def balance_batch_across_dp(
     # to be its own block is a per-rank decision taken before a collective: the ranks that skip never
     # reach the all_gather and the ranks that do not wait for them forever. The saving would have
     # been one exchange on the rare step where nothing needs to move.
-    layout, columns = _split_columns(data)
-    shared = {key: columns[key] for key, kind in layout.items() if kind is _SHARED}
-    local = [
-        {key: columns[key][i] for key, kind in layout.items() if kind is not _SHARED} for i in range(local_bsz)
-    ]
+    # One object per rank, not one per sample. Walking a batch column element-wise looks harmless
+    # and is not: indexing a tensorclass or NonTensorStack copies the whole column per element, so
+    # a 16-sample batch of 8k-token rows spent twelve minutes at 100% CPU and 63 GB of RSS before
+    # anyone could tell it apart from a hang.
+    gathered: list = [None] * dp_size
+    dist.all_gather_object(gathered, data.cpu(), group=dp_group)
 
-    gathered: list[list[dict]] = [None] * dp_size
-    dist.all_gather_object(gathered, local, group=dp_group)
-    flat = [sample for rank_samples in gathered for sample in rank_samples]
-
-    selected = _rebuild(layout, [flat[i] for i in mine], shared)
+    selected = tu.index_select_tensor_dict(tu.concat_tensordict(gathered), mine)
     return selected.to(device) if device is not None else selected
