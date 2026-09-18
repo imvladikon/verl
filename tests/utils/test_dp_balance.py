@@ -152,3 +152,52 @@ def test_balance_improves_the_spread():
 
     assert balanced_ratio < before_ratio, f"{per_rank} is no better than {before}"
     assert balanced_ratio < 1.1, f"still lopsided: {per_rank}"
+
+
+def _worker_asymmetric(rank, world_size, result_queue):
+    """One rank's partition is its own block; the others' are not.
+
+    That asymmetry is what a per-rank early return turns into a hang: the rank that decides it has
+    nothing to do never reaches the collective the others are already waiting in.
+    """
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT="29532", RANK=str(rank), WORLD_SIZE=str(world_size))
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    try:
+        import verl.utils.dp_balance as dp_balance
+
+        local_bsz = 4
+
+        def block(index):
+            return list(range(index * local_bsz, (index + 1) * local_bsz))
+
+        # Rank 0 keeps its own block; ranks 1..n-1 rotate, so only rank 0 would take the shortcut.
+        forced = [block(0)] + [block(1 + (r % (world_size - 1))) for r in range(1, world_size)]
+        dp_balance.partition_for_dp = lambda seqlens, dp: forced
+
+        seqlens = [length for rank_lengths in _LENGTHS for length in rank_lengths]
+        balanced = dp_balance.balance_batch_across_dp(
+            _make_batch(_LENGTHS[rank]), seqlens, dp_group=None, dp_size=world_size
+        )
+        result_queue.put((rank, [int(balanced["input_ids"][i][0]) for i in range(local_bsz)]))
+    finally:
+        dist.destroy_process_group()
+
+
+def test_a_rank_whose_partition_is_its_own_block_still_joins_the_exchange():
+    """Regression: an early return here deadlocked a 32-GPU run on its first step."""
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue()
+    procs = [ctx.Process(target=_worker_asymmetric, args=(rank, 4, queue)) for rank in range(4)]
+    for proc in procs:
+        proc.start()
+    try:
+        results = dict(queue.get(timeout=60) for _ in procs)
+    finally:
+        for proc in procs:
+            proc.join(timeout=60)
+            if proc.is_alive():
+                proc.terminate()
+                raise AssertionError("a rank never returned: the exchange is not collective")
+    assert sorted(results) == [0, 1, 2, 3]
+    # Rank 0 asked for its own samples and must still have exactly them.
+    assert results[0] == [length for length in _LENGTHS[0]]

@@ -119,9 +119,11 @@ def balance_batch_across_dp(
     mine = sorted(partition_for_dp(seqlens, dp_size)[rank])
     # A partition of the wrong size would change the step's sample count, not just its balance.
     assert len(mine) == local_bsz, f"partition for rank {rank} has {len(mine)} samples, expected {local_bsz}"
-    if mine == list(range(rank * local_bsz, (rank + 1) * local_bsz)):
-        return data  # already exactly this rank's own samples
 
+    # The exchange below is unconditional on purpose. Skipping it for a rank whose partition happens
+    # to be its own block is a per-rank decision taken before a collective: the ranks that skip never
+    # reach the all_gather and the ranks that do not wait for them forever. The saving would have
+    # been one exchange on the rare step where nothing needs to move.
     layout, columns = _split_columns(data)
     shared = {key: columns[key] for key, kind in layout.items() if kind is _SHARED}
     local = [
