@@ -88,6 +88,7 @@ class SFTTrainer:
             logger=logger,
             log_only_rank_0=True,
         )
+        self._warned_no_micro_batch_count = False
 
         if self.rank == 0:
             print(self.config)
@@ -492,6 +493,21 @@ class SFTTrainer:
                     total_tokens += metrics["train/global_tokens"]
                     metrics["train/total_tokens(B)"] = total_tokens / 1e9
                     metrics.update(imbalance)
+                    # The engine agrees this count across the dp group by taking the maximum, so the
+                    # heaviest rank sets it for everyone: balancing the batch can drop a whole
+                    # micro-batch, and with it a forward, a backward and one dispatcher barrier per
+                    # MoE layer. That is a second saving on top of the shorter wait, and without
+                    # this number the two are not separable in a step time.
+                    micro_batches = tu.get_non_tensor_data(data, key="num_micro_batch", default=None)
+                    if micro_batches is not None:
+                        metrics["train/num_micro_batch"] = int(micro_batches)
+                    elif not self._warned_no_micro_batch_count:
+                        self._warned_no_micro_batch_count = True
+                        logger.warning(
+                            "num_micro_batch did not come back from the engine, so train/"
+                            "num_micro_batch is missing: a step-time change cannot be split between "
+                            "a shorter wait and one fewer micro-batch."
+                        )
 
                     if self.engine.get_data_parallel_rank() == 0:
                         tracking.log(data=metrics, step=global_step)
