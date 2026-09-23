@@ -28,6 +28,7 @@ import torch
 from packaging import version
 from ray.actor import ActorHandle
 from sglang.srt.entrypoints.http_server import (
+    Engine,
     ServerArgs,
     _GlobalState,
     app,
@@ -502,10 +503,6 @@ class SGLangHttpServer:
 
         # mtp
         if self.config.mtp is not None and self.config.mtp.enable and self.config.mtp.enable_rollout:
-            # Enable weights CPU backup for sglang >= 0.5.6
-            if version.parse(sglang.__version__) < version.parse("0.5.6"):
-                raise ValueError(f"sglang version {sglang.__version__} is not supported for MTP rollout")
-
             args["speculative_algorithm"] = self.config.mtp.speculative_algorithm
             args["speculative_num_steps"] = self.config.mtp.speculative_num_steps
             args["speculative_eagle_topk"] = self.config.mtp.speculative_eagle_topk
@@ -1017,7 +1014,7 @@ class SGLangReplica(RolloutReplica):
                     }
                 },
                 name=name,
-                max_concurrency=self.max_concurrency,
+                max_concurrency=self.config.ray_actor_max_concurrency,
             ).remote(
                 config=self.config,
                 model_config=self.model_config,
@@ -1051,12 +1048,21 @@ class SGLangReplica(RolloutReplica):
             else f"{server_address}:{server_port}"
         )
 
-    async def abort_all_requests(self):
+    async def abort_all_requests(self, reject_request: bool = False):
         """Abort all ongoing generation requests on the primary server.
 
         SGLang control RPCs are only served by the node-rank 0 server for a
         multi-node replica, so avoid broadcasting this call to every server.
         """
+        if reject_request:
+            # SGLang blocks new requests inside its own tokenizer manager, so verl has no
+            # admission point to fail them at. Requests routed here after the pause wait
+            # until continue_generation(). TODO: add a verl-side gate in front of
+            # tokenizer_manager.pause_generation() so this replica can reject them too.
+            logger.warning(
+                "SGLang rollout ignores reject_request=True: requests arriving while generation "
+                "is paused will wait for the next resume_generation() instead of failing over."
+            )
         await self.servers[0].abort_all_requests.remote()
 
     async def resume_generation(self):
