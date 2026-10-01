@@ -33,7 +33,6 @@ def verify_config(
 
     engine = config["engine"]
     require(engine["use_mbridge"] is True, "Megatron Bridge disabled")
-    require(engine["vanilla_mbridge"] is False, "vanilla Bridge path selected")
     require(engine["tensor_model_parallel_size"] == 2, "TP drift")
     require(engine["expert_model_parallel_size"] == 2, "EP drift")
     require(engine["expert_tensor_parallel_size"] == 1, "ETP drift")

@@ -29,10 +29,10 @@ __all__ = (
     + critic.__all__
     + reward.__all__
     + engine.__all__
+    + checkpoint.__all__
     + optimizer.__all__
     + rollout.__all__
     + model.__all__
     + distillation.__all__
     + disaggregation.__all__
-    + checkpoint.__all__
 )
